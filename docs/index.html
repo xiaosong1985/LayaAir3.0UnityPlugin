@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LayaAir3.0 Unity 导出插件 · 能力一览</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="page">
+    <p class="eyebrow">Unity → LayaAir 3.0 · 导出能力</p>
+    <h1>LayaAir3.0 Unity 导出插件 · 能力一览</h1>
+    <p class="subtitle">
+      本表基于插件源码逐模块核查整理，列出 Unity 各功能能否导出到 LayaAir 3.0 及其支持程度。
+      关键且复杂的导出流程可点击「查看导出流程 →」进入对应详情页。
+    </p>
+    <div class="meta-row">
+      <span><b>插件版本</b> 1.1.7</span>
+      <span><b>入口</b> Unity 菜单 <code>LayaAir3D 3.0 / Export Tool</code></span>
+      <span><b>导出根模式</b> 整场景 Scene / 预制体 Sprite3D</span>
+    </div>
+    <div class="quickstart">
+      <span class="qs-text"><b>第一次使用？</b> 先看安装步骤与导出窗口各控件的含义。</span>
+      <a class="flow-link" href="install.html">安装与界面介绍 <span class="arrow">→</span></a>
+    </div>
+  </header>
+
+  <!-- 图例 -->
+  <div class="legend">
+    <span class="item"><span class="badge full">完整</span> 字段基本完整映射</span>
+    <span class="item"><span class="badge part">部分</span> 仅子集 / 有损 / 有取舍</span>
+    <span class="item"><span class="badge conf">看配置</span> 取决于开关或模式</span>
+    <span class="item"><span class="badge exp">实验性</span> 隐藏 / 未暴露 / 不完善</span>
+    <span class="item"><span class="badge no">不支持</span> 不导出</span>
+  </div>
+
+  <!-- 1. 场景 / 节点 / 组件 -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left">
+        <h2>① 场景 / 节点 / 组件</h2>
+        <span class="gh-desc">GameObject 层级 → Sprite3D 节点树，含左手→右手坐标转换</span>
+      </div>
+      <a class="flow-link" href="flows/overview.html">查看导出流程 <span class="arrow">→</span></a>
+    </div>
+    <table>
+      <thead><tr><th>Unity 功能</th><th>LayaAir 目标</th><th>支持度</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="feat">GameObject + Transform 层级</td>
+          <td class="target">Sprite3D 节点 + transform</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">name / active / layer / tag / isStatic；自动 X 轴翻转、相机/灯光 Y180 补偿</td>
+        </tr>
+        <tr>
+          <td class="feat">Camera</td>
+          <td class="target"><code>Camera</code> 节点</td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="note">clearFlags / 正交 / 近远裁剪 / HDR / 视口 / 背景色可导。<b>FOV 按 Laya 设计分辨率 1334/750 重算</b>；cullingMask、targetTexture、物理相机参数不导</td>
+        </tr>
+        <tr>
+          <td class="feat">Light（方向 / 点 / 聚光）</td>
+          <td class="target"><code>DirectionLightCom</code> / <code>PointLightCom</code> / <code>SpotLightCom</code></td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">强度、颜色、阴影模式（硬/软）、烘焙类型、range、spotAngle。<b>Area/Disc/Rectangle 灯不导</b></td>
+        </tr>
+        <tr>
+          <td class="feat">MeshFilter + MeshRenderer</td>
+          <td class="target"><code>MeshFilter</code> + <code>MeshRenderer</code></td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">材质、enabled、receiveShadow、castShadow。lightmap 索引、探针用法、运动矢量不导</td>
+        </tr>
+        <tr>
+          <td class="feat">SkinnedMeshRenderer</td>
+          <td class="target"><code>MeshFilter</code> + <code>SkinnedMeshRenderer</code></td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">含骨骼引用、rootBone、bindpose、localBounds</td>
+        </tr>
+        <tr>
+          <td class="feat">ReflectionProbe</td>
+          <td class="target"><code>ReflectionProbe</code></td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="note">bounds / importance / boxProjection 等可导；cullingMask、ambientColor、IBL 采样数为硬编码常量，烘焙立方图不导</td>
+        </tr>
+        <tr>
+          <td class="feat">LODGroup</td>
+          <td class="target"><code>LODGroup</code></td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">各 LOD 层级 + 切换比例 + renderer 引用</td>
+        </tr>
+        <tr>
+          <td class="feat">场景渲染设置</td>
+          <td class="target">Scene 根节点</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">天空盒、环境光 / 模式、球谐 SH、雾效（start/range/color）</td>
+        </tr>
+        <tr>
+          <td class="feat">Prefab 预制体实例</td>
+          <td class="target"><code>_$prefab</code> 引用 + override 差异</td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="note">仅在「预制体 / Sprite3D」导出路径生效；<b>整场景导出时会内联展开，不保留预制体引用</b></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 2. 网格 -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left">
+        <h2>② 网格 Mesh</h2>
+        <span class="gh-desc">二进制 <code>.lm</code> 格式（LAYAMODEL:0501）</span>
+      </div>
+      <a class="flow-link" href="flows/mesh.html">查看导出流程 <span class="arrow">→</span></a>
+    </div>
+    <table>
+      <thead><tr><th>Unity 功能</th><th>LayaAir 目标</th><th>支持度</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="feat">顶点 Position / Normal / Tangent / Color</td>
+          <td class="target">交错顶点缓冲</td>
+          <td class="sup"><span class="badge conf">看配置</span></td>
+          <td class="note">可逐项剥离（IgnoreVertices*）；X 轴翻转</td>
+        </tr>
+        <tr>
+          <td class="feat">UV0 / UV1（mesh.uv / uv2）</td>
+          <td class="target">UV / UV1</td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="note">V 翻转为左上原点；静态与蒙皮网格对忽略标志处理不一致</td>
+        </tr>
+        <tr>
+          <td class="feat">蒙皮（骨骼权重 + 索引）</td>
+          <td class="target">BLENDWEIGHT / BLENDINDICES</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">每绘制调用 <b>≤24 骨骼</b>，超出拆分绘制组（会复制顶点）</td>
+        </tr>
+        <tr>
+          <td class="feat">子网格（多材质）</td>
+          <td class="target">SUBMESH 索引区间</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">每子网格独立索引范围</td>
+        </tr>
+        <tr>
+          <td class="feat">网格简化 / LOD 减面</td>
+          <td class="target">减面后的 Mesh</td>
+          <td class="sup"><span class="badge conf">看配置</span></td>
+          <td class="note">独立减面工具（主要给粒子网格用），<b>非</b> Unity LODGroup 导入器；高质量 QEM 需可选包 + 编译宏</td>
+        </tr>
+        <tr>
+          <td class="feat">BlendShape 形变 / UV2-7 / 几何压缩</td>
+          <td class="target">—</td>
+          <td class="sup"><span class="badge no">不支持</span></td>
+          <td class="note">不读取、不导出；顶点全为裸 float32，无压缩量化</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 3. 材质 & 内置 Shader -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left">
+        <h2>③ 材质 &amp; 内置 Shader</h2>
+        <span class="gh-desc">按 Shader 精确名查表映射 → <code>.lmat</code>（LAYAMATERIAL:04）</span>
+      </div>
+      <a class="flow-link" href="flows/material-shader.html">查看导出流程 <span class="arrow">→</span></a>
+    </div>
+    <table>
+      <thead><tr><th>Unity Shader</th><th>LayaAir 材质</th><th>支持度</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="feat">Standard（Metallic）</td>
+          <td class="target">PBR</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">反照率 / 法线 / 金属光泽 / 细节 / 自发光 / AO / 视差 全套</td>
+        </tr>
+        <tr>
+          <td class="feat">Standard（Specular setup）</td>
+          <td class="target">—</td>
+          <td class="sup"><span class="badge no">不支持</span></td>
+          <td class="note"><b>无映射条目</b>，会警告或转去自定义 Shader 导出</td>
+        </tr>
+        <tr>
+          <td class="feat">URP / Lit · Simple Lit · Unlit</td>
+          <td class="target">PBR / BlinnPhong / Unlit</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">各自映射对应贴图槽与属性</td>
+        </tr>
+        <tr>
+          <td class="feat">HDRP / Lit</td>
+          <td class="target">PBR</td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="note">MaskMap 通道语义与 Laya 不完全一致；无 AO/细节/视差槽</td>
+        </tr>
+        <tr>
+          <td class="feat">Skybox（6 Sided / Procedural / Panoramic）</td>
+          <td class="target">SkyBox / SkyProcedural / SkyPanoramic</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">6 Sided 会生成 <code>.cubemap</code> 资源</td>
+        </tr>
+        <tr>
+          <td class="feat">Legacy / Mobile（Diffuse · Bumped · Specular · VertexLit）</td>
+          <td class="target">BlinnPhong</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">主纹理 / 法线 / 高光等按变体映射</td>
+        </tr>
+        <tr>
+          <td class="feat">渲染状态（Cull / Blend / AlphaTest / RenderQueue）</td>
+          <td class="target">s_Cull / s_Blend / ...</td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="note">可推算；<b>ZWrite/ZTest 仅对粒子材质写入</b>，普通材质走 Laya 默认</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 4. 自定义 Shader -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left">
+        <h2>④ 自定义 Shader 导出</h2>
+        <span class="gh-desc">任意 ShaderLab/CG/HLSL → LayaAir GLSL（默认关闭）</span>
+      </div>
+      <a class="flow-link" href="flows/custom-shader.html">查看导出流程 <span class="arrow">→</span></a>
+    </div>
+    <table>
+      <thead><tr><th>能力</th><th>LayaAir 目标</th><th>支持度</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="feat">Properties / HLSL 类型 / 数学函数 / 纹理采样 转换</td>
+          <td class="target">Laya <code>.shader</code> + GLSL</td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="note">正则启发式改写，约 150 条属性名映射、JSON 映射表、手写预转换模板（推荐）</td>
+        </tr>
+        <tr>
+          <td class="feat">多 Pass / #include 内容 / URP-HDRP 宏 / multi_compile 变体</td>
+          <td class="target">—</td>
+          <td class="sup"><span class="badge no">不支持</span></td>
+          <td class="note">仅解析首个 Pass；include 不内联；不处理 CBUFFER/TEXTURE2D 宏；只认 <code>vert</code>/<code>frag</code> 入口</td>
+        </tr>
+        <tr>
+          <td class="feat">整体转换质量</td>
+          <td class="target">—</td>
+          <td class="sup"><span class="badge exp">实验性</span></td>
+          <td class="note">工具自打印「预估转换率」，&lt;80% 时提示<b>需手动调整</b></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 5. 粒子系统 -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left">
+        <h2>⑤ 粒子系统 Shuriken</h2>
+        <span class="gh-desc">GPU / CPU 两条互斥路径，按对象自动选择</span>
+      </div>
+      <a class="flow-link" href="flows/particle.html">查看导出流程 <span class="arrow">→</span></a>
+    </div>
+    <table>
+      <thead><tr><th>Unity 模块</th><th>GPU 模式</th><th>CPU 模式</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="feat">Main / Emission / Shape</td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">GPU 下曲线降级为常量、Shape 部分类型回退球形</td>
+        </tr>
+        <tr>
+          <td class="feat">Velocity / Color / Size / Rotation over Lifetime</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">四种曲线模式均支持</td>
+        </tr>
+        <tr>
+          <td class="feat">Texture Sheet Animation</td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="note">仅 Grid 模式，不支持 Sprites 模式</td>
+        </tr>
+        <tr>
+          <td class="feat">Renderer（Billboard / Stretch / Mesh）</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">5 种渲染模式</td>
+        </tr>
+        <tr>
+          <td class="feat">Trails 拖尾 / Noise / Collision / Limit·Inherit Velocity / Force / by Speed / External Forces / Sub Emitters</td>
+          <td class="sup"><span class="badge no">不支持</span></td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note"><b>启用 Trails / Noise / LimitVelocity 时自动强制切到 CPU 模式</b>，因此正常不会真的丢失</td>
+        </tr>
+        <tr>
+          <td class="feat">Lights / Trigger / Custom Data</td>
+          <td class="sup"><span class="badge no">不支持</span></td>
+          <td class="sup"><span class="badge no">不支持</span></td>
+          <td class="note">两种模式都不导出</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 6. 动画 -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left">
+        <h2>⑥ 动画</h2>
+        <span class="gh-desc">3D 属性动画 <code>.lani</code> · 2D 动画 <code>.mc</code>/<code>.mcc</code></span>
+      </div>
+      <a class="flow-link" href="flows/animation.html">查看导出流程 <span class="arrow">→</span></a>
+    </div>
+    <table>
+      <thead><tr><th>Unity 功能</th><th>LayaAir 目标</th><th>支持度</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="feat">Transform / 位置 / 旋转 / 缩放 / Euler 曲线</td>
+          <td class="target"><code>.lani</code> 节点</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">含坐标转换、事件、帧率、循环</td>
+        </tr>
+        <tr>
+          <td class="feat">材质属性曲线 / 材质切换</td>
+          <td class="target">sharedMaterials 节点 / MaterialSwap</td>
+          <td class="sup"><span class="badge conf">看配置</span></td>
+          <td class="note">属性须在该 Shader 的映射配置表中</td>
+        </tr>
+        <tr>
+          <td class="feat">Camera / 自定义脚本 / 其他组件 属性曲线</td>
+          <td class="target">对应节点（反射推断类型）</td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="note">int/bool 被并入 Float 关键帧</td>
+        </tr>
+        <tr>
+          <td class="feat">2D SpriteRenderer 颜色动画 + Animator 状态机</td>
+          <td class="target"><code>.mc</code> + <code>.mcc</code></td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="note">仅 m_Color；2D 状态机仅顶层状态/转换/参数</td>
+        </tr>
+        <tr>
+          <td class="feat">3D Animator + AnimatorController</td>
+          <td class="target"><code>Animator</code> + AnimationController JSON</td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="note">仅 motion 为 AnimationClip 的状态</td>
+        </tr>
+        <tr>
+          <td class="feat">BlendTree / IK / 根运动 / 人形重定向 / BlendShape 曲线 / 加权切线</td>
+          <td class="target">—</td>
+          <td class="sup"><span class="badge no">不支持</span></td>
+          <td class="note">混合树、Mecanim 重定向等均不处理</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 7. 2D / Sprite -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left">
+        <h2>⑦ 2D / Sprite</h2>
+        <span class="gh-desc">SpriteRenderer → UI3D + Mesh2DRender + 图集</span>
+      </div>
+      <a class="flow-link" href="flows/sprite-2d.html">查看导出流程 <span class="arrow">→</span></a>
+    </div>
+    <table>
+      <thead><tr><th>Unity 功能</th><th>LayaAir 目标</th><th>支持度</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="feat">SpriteRenderer（整图）</td>
+          <td class="target">UI3D + 2D 预制体 <code>.lh</code></td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">Mesh2DRender 引用纹理</td>
+        </tr>
+        <tr>
+          <td class="feat">SpriteRenderer（子区域 / 图集）</td>
+          <td class="target"><code>.atlas</code> + <code>fileconfig.json</code></td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">会把整张纹理上所有子精灵都打进图集（含未使用的）</td>
+        </tr>
+        <tr>
+          <td class="feat">SpriteRenderer m_Color 颜色动画</td>
+          <td class="target">Animator2D + <code>.mcc</code></td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="note"><b>精灵帧切换 m_Sprite 动画不支持</b></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 8. 纹理 -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left">
+        <h2>⑧ 纹理资源</h2>
+        <span class="gh-desc">Texture2D → png / jpg / hdr + .meta importer 配置</span>
+      </div>
+    </div>
+    <table>
+      <thead><tr><th>Unity 功能</th><th>LayaAir 目标</th><th>支持度</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="feat">Texture2D（普通 / 法线 / Sprite / HDR）</td>
+          <td class="target">.png（带 alpha）/ .jpg / .hdr</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">采样状态（wrap/filter/mipmap/各向异性/sRGB）完整映射；jpg 固定质量 75</td>
+        </tr>
+        <tr>
+          <td class="feat">压缩格式（DXT/ETC/ASTC）</td>
+          <td class="target">强制未压缩 R8G8B8(A8)</td>
+          <td class="sup"><span class="badge part">部分</span></td>
+          <td class="note"><b>刻意丢弃压缩</b>，避免 Laya 压缩纹理兼容问题</td>
+        </tr>
+        <tr>
+          <td class="feat">分平台覆盖（iOS/Android/WebGL）</td>
+          <td class="target">单一 platformDefault</td>
+          <td class="sup"><span class="badge no">不支持</span></td>
+          <td class="note">HDR 路径依赖 Windows msvcrt.dll（仅 Windows）</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 9. 脚本 & 配置 -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left">
+        <h2>⑨ 自定义脚本 &amp; 导出配置</h2>
+        <span class="gh-desc">MonoBehaviour → LayaAir TS 脚本（UUID 映射）</span>
+      </div>
+    </div>
+    <table>
+      <thead><tr><th>能力</th><th>LayaAir 目标</th><th>支持度</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="feat">自定义脚本 UUID 映射</td>
+          <td class="target">映射后的 <code>_$comp</code> + 序列化属性</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">菜单「组件脚本导出配置」；支持属性名重映射。<b>未映射的脚本会被静默丢弃</b>，UUID 需手动填</td>
+        </tr>
+        <tr>
+          <td class="feat">序列化属性类型</td>
+          <td class="target">—</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">Float / Int / Bool / String / Enum / Color / Vector2-4 / Quaternion / Rect</td>
+        </tr>
+        <tr>
+          <td class="feat">内置运行时 TS 脚本注入</td>
+          <td class="target"><code>_src_/</code> 目录</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">目前仅 <code>Animator2DSync.ts</code></td>
+        </tr>
+        <tr>
+          <td class="feat">导出配置项</td>
+          <td class="target">Configuration.xml</td>
+          <td class="sup"><span class="badge full">完整</span></td>
+          <td class="note">根模式、忽略非激活对象、批量导出、顶点流剥离、自动 UV1、输出目录、启用自定义 Shader、粒子默认模式、中/英语言</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 10. 明确不支持 -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left">
+        <h2>⑩ 明确不支持的组件</h2>
+        <span class="gh-desc">导出时检测并在控制台/对话框警告，但<b>不阻断导出</b>，相关功能静默丢弃</span>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="chip">Rigidbody 刚体</span>
+      <span class="chip">Box/Sphere/Capsule/Mesh Collider 碰撞器</span>
+      <span class="chip">CharacterController 角色控制器</span>
+      <span class="chip">Joint 所有关节</span>
+      <span class="chip">AudioSource 音频源</span>
+      <span class="chip">AudioListener 音频监听</span>
+      <span class="chip">TrailRenderer 拖尾渲染器</span>
+      <span class="chip">LineRenderer 线条渲染器</span>
+      <span class="chip">Cloth 布料</span>
+      <span class="chip">WindZone 风区</span>
+      <span class="chip">Canvas uGUI 画布</span>
+      <span class="chip">VideoPlayer 视频</span>
+      <span class="chip">Terrain 地形</span>
+    </div>
+    <p class="chips-note">
+      注：<b>TrailRenderer（独立拖尾组件）</b>不导出；但<b>粒子系统的 Trails 拖尾模块</b>可导出（见 ⑤ 粒子系统，启用时自动走 CPU 模式）。
+      LayaAir 引擎本身具备拖尾能力，此处为插件未做该组件的转换。
+    </p>
+  </section>
+
+  <footer class="page">
+    <p>本能力表基于插件源码逐模块核查整理（插件版本 1.1.7）。复杂导出流程详情见各分组的「查看导出流程 →」链接。</p>
+  </footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>安装与界面介绍 · LayaAir3.0 Unity 导出插件</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <a class="back-link" href="index.html"><span>←</span> 返回能力一览</a>
+
+  <header class="page">
+    <p class="eyebrow">入门指南 · 安装 &amp; 界面</p>
+    <h1>安装与界面介绍</h1>
+    <p class="subtitle">
+      从安装到第一次成功导出，本页介绍插件的环境要求、安装步骤、菜单总览，以及导出窗口各控件的含义。
+    </p>
+    <div class="meta-row">
+      <span><b>包名</b> <code>com.layaair.export-tool</code></span>
+      <span><b>版本</b> 1.1.7</span>
+      <span><b>适用</b> Unity 2019.4 及以上</span>
+    </div>
+  </header>
+
+  <!-- 环境要求 -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left"><h2>① 环境要求</h2></div>
+    </div>
+    <div class="req-grid">
+      <div class="req"><div class="k">Unity 版本</div><div class="v">2019.4 LTS+</div></div>
+      <div class="req"><div class="k">导出目标</div><div class="v">LayaAir 3.x</div></div>
+      <div class="req"><div class="k">运行平台</div><div class="v">Windows（HDR 导出依赖 msvcrt.dll）</div></div>
+      <div class="req"><div class="k">外部依赖</div><div class="v">无（package.json 无 dependencies）</div></div>
+    </div>
+    <div class="note">
+      <b>可选增强：</b>仓库内 <code>LayaShader/</code> 提供了一套与 Laya 对应的 Unity 作者 Shader（<code>Laya/BlinnPhong</code>、<code>Laya/Unlit</code> 等）。给材质改用这些 Shader 可获得最佳的材质导出保真度；高质量网格简化则需另装 UnityMeshSimplifier 包并开启 <code>UNITY_MESH_SIMPLIFIER</code> 编译宏。
+    </div>
+  </section>
+
+  <!-- 安装步骤 -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left"><h2>② 安装步骤</h2><span class="gh-desc">推荐：直接放入 Assets 目录</span></div>
+    </div>
+    <ol class="steps">
+      <li>
+        <div class="st-title">获取插件</div>
+        <div class="st-body">克隆或下载本仓库（含 <code>Editor/</code>、<code>Runtime/</code>、<code>LayaShader/</code>、<code>package.json</code>）。</div>
+      </li>
+      <li>
+        <div class="st-title">放入项目 Assets</div>
+        <div class="st-body">将整个插件文件夹放到 Unity 工程的 <code>Assets/LayaAir3.0UnityPlugin/</code> 下。Unity 会自动编译 <code>Editor/</code> 内的编辑器脚本。</div>
+      </li>
+      <li>
+        <div class="st-title">等待编译完成</div>
+        <div class="st-body">Console 无报错后，顶部菜单栏会出现 <code>LayaAir3D 3.0</code> 与 <code>LayaAir</code> 两个菜单。</div>
+      </li>
+      <li>
+        <div class="st-title">打开导出窗口</div>
+        <div class="st-body">菜单 <code>LayaAir3D 3.0 / Export Tool</code> 打开主窗口，即可开始配置导出。</div>
+      </li>
+    </ol>
+    <div class="note warn">
+      <b>为什么放在 Assets 而不是用 Package Manager？</b><br>
+      插件大部分文件靠 <code>AssetDatabase.FindAssets("LanguageConfig")</code> 动态定位自身，理论上可放任意位置；但<b>运行时脚本注入</b>（<code>Animator2DSync.ts</code>）与<b>组件脚本映射文件</b>硬编码到 <code>Assets/LayaAir3.0UnityPlugin/…</code>。若通过 UPM 安装到只读的 <code>Packages/</code> 目录，这些功能会失效。<b>因此请安装到 <code>Assets/LayaAir3.0UnityPlugin/</code>。</b>
+    </div>
+    <div class="note warn">
+      <b>避免重名冲突：</b>自定位依赖工程中存在唯一的 <code>LanguageConfig.cs</code>。若项目里有同名文件，插件会报「File name clash」并停止——请确保不重复导入。
+    </div>
+  </section>
+
+  <!-- 菜单总览 -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left"><h2>③ 菜单总览</h2></div>
+    </div>
+    <table>
+      <thead><tr><th>菜单路径</th><th>作用</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="feat"><code>LayaAir3D 3.0 / Export Tool</code></td>
+          <td class="target">打开导出主窗口</td>
+          <td class="note">核心入口，所有导出配置与导出按钮都在此</td>
+        </tr>
+        <tr>
+          <td class="feat"><code>LayaAir3D 3.0 / Setting</code></td>
+          <td class="target">语言切换</td>
+          <td class="note">English / 中文；默认中文，切换后导出窗口实时刷新</td>
+        </tr>
+        <tr>
+          <td class="feat"><code>LayaAir3D 3.0 / Help / Study</code></td>
+          <td class="target">打开教程链接</td>
+          <td class="note">远程配置 URL（注：源码中 Help 的 URL 取值疑似被对调，属已知小问题）</td>
+        </tr>
+        <tr>
+          <td class="feat"><code>LayaAir3D 3.0 / Help / Answsers</code></td>
+          <td class="target">打开问答链接</td>
+          <td class="note">菜单原文即为 "Answsers"（拼写如此）</td>
+        </tr>
+        <tr>
+          <td class="feat"><code>LayaAir / 组件脚本导出配置</code></td>
+          <td class="target">组件脚本 UUID 映射面板</td>
+          <td class="note">配置 Unity 自定义组件 → LayaAir TS 脚本 UUID 的映射（注意它在 <code>LayaAir</code> 顶级菜单下）</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 导出窗口界面介绍 -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left"><h2>④ 导出窗口界面</h2><span class="gh-desc">Export Tool 窗口结构示意</span></div>
+    </div>
+
+    <!-- 窗口示意图 -->
+    <div class="win-mock">
+      <div class="wm-title"><span class="wm-dots"><i></i><i></i><i></i></span> LayaAir3D — Export Tool</div>
+      <div class="wm-body">
+        <div class="seg"><span class="on">Scene 场景</span><span>Sprite3D 预制体</span></div>
+
+        <div class="fold">
+          <div class="fold-h">游戏对象设置 GameObjectSetting</div>
+          <div class="opt"><span class="box"></span>忽略未激活的 GameObject</div>
+          <div class="opt"><span class="box"></span>批量导出第一级 GameObject<span class="tag-mode">仅 Sprite3D 模式</span></div>
+        </div>
+
+        <div class="fold">
+          <div class="fold-h">网格设置 MeshSetting</div>
+          <div class="opt"><span class="box"></span>忽略 UV / 顶点色 / 法线 / 切线（4 个独立开关）</div>
+          <div class="opt"><span class="box"></span>自动生成 UV1（光照贴图用）</div>
+        </div>
+
+        <div class="fold">
+          <div class="fold-h">其他设置 OtherSetting</div>
+          <div class="opt"><span class="box"></span>自定义导出根目录名 &nbsp;<span class="inp" style="padding:1px 8px;">名称…</span></div>
+          <div class="opt">粒子导出默认模式 &nbsp;<span class="seg" style="margin:0;"><span class="on" style="padding:3px 12px;">Shuriken (GPU)</span><span style="padding:3px 12px;">CPU Particle</span></span></div>
+        </div>
+
+        <div class="fold">
+          <div class="fold-h">自定义 Shader 设置 CustomShaderSetting</div>
+          <div class="opt"><span class="box"></span>启用自定义 Shader 导出<span class="tag-mode">默认关闭</span></div>
+        </div>
+
+        <div class="fold">
+          <div class="fold-h">组件脚本导出配置</div>
+          <div class="opt"><span class="btn" style="display:inline-block;">打开组件 UUID 映射配置面板</span></div>
+        </div>
+
+        <div class="wm-field">
+          <span class="lbl">保存路径</span>
+          <span class="inp">Assets</span>
+          <span class="btn">Browse</span>
+        </div>
+        <div class="wm-export">⬇　LayaAir Export　导出</div>
+      </div>
+    </div>
+
+    <!-- 控件说明 -->
+    <div class="callout-grid">
+      <div class="ci"><div class="n">A</div><div class="c">
+        <div class="t">顶部模式切换：Scene / Sprite3D</div>
+        <div class="d">选择导出源：整个当前场景，或预制体 / Sprite3D 层级。选 Sprite3D 模式时才会出现「批量导出第一级」选项（每个一级子节点导出为独立文件）。</div>
+      </div></div>
+      <div class="ci"><div class="n">B</div><div class="c">
+        <div class="t">游戏对象设置</div>
+        <div class="d"><b>忽略未激活的 GameObject</b>：跳过 inactive 物体。<b>批量导出第一级</b>：把根的每个一级子节点拆成独立输出。</div>
+      </div></div>
+      <div class="ci"><div class="n">C</div><div class="c">
+        <div class="t">网格设置</div>
+        <div class="d">四个剥离开关（UV / 顶点色 / 法线 / 切线）可减小网格体积；<b>自动生成 UV1</b> 在缺失光照贴图 UV 时自动生成。</div>
+      </div></div>
+      <div class="ci"><div class="n">D</div><div class="c">
+        <div class="t">其他设置 · 自定义目录 &amp; 粒子模式</div>
+        <div class="d"><b>自定义导出根目录名</b>：在保存路径下追加子文件夹。<b>粒子导出默认模式</b>：全局默认 GPU(Shuriken) 或 CPU；单个粒子可挂 <code>LayaParticleExportSetting</code> 组件覆盖，启用 Trails/Noise 等模块时会自动转 CPU。</div>
+      </div></div>
+      <div class="ci"><div class="n">E</div><div class="c">
+        <div class="t">自定义 Shader 设置</div>
+        <div class="d">勾选后，未在映射表中的 Shader 会经启发式转换为 Laya GLSL（默认关闭，转换有损，复杂 Shader 需手动调整）。<code>ENABLE_PARTICLE_MESH_OPTIMIZATION</code> 宏开启时此处还会显示粒子 Mesh 优化选项。</div>
+      </div></div>
+      <div class="ci"><div class="n">F</div><div class="c">
+        <div class="t">组件脚本导出配置</div>
+        <div class="d">点击按钮打开 UUID 映射面板，把 Unity 自定义组件映射到 LayaAir TS 脚本。未映射的自定义组件不会被导出。</div>
+      </div></div>
+      <div class="ci"><div class="n">G</div><div class="c">
+        <div class="t">保存路径 + Browse</div>
+        <div class="d">导出产物的输出目录，默认 <code>Assets</code>。留空会红字提示「保存路径不能为空」。</div>
+      </div></div>
+      <div class="ci"><div class="n">H</div><div class="c">
+        <div class="t">LayaAir Export 导出按钮</div>
+        <div class="d">执行导出（调用 <code>LayaAir3Export.ExportScene()</code>）。出错时 Console 打印失败信息与堆栈。</div>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- 典型流程 -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left"><h2>⑤ 典型导出流程</h2></div>
+      <a class="flow-link" href="flows/overview.html">查看完整导出流程 <span class="arrow">→</span></a>
+    </div>
+    <ol class="steps">
+      <li><div class="st-title">选择导出模式</div><div class="st-body">整场景选 Scene；导单个角色/道具预制体选 Sprite3D。</div></li>
+      <li><div class="st-title">按需调整设置</div><div class="st-body">网格剥离、粒子默认模式、是否启用自定义 Shader 导出、自定义脚本映射等。</div></li>
+      <li><div class="st-title">设定保存路径</div><div class="st-body">指定输出目录（可配合自定义根目录名）。</div></li>
+      <li><div class="st-title">点击导出</div><div class="st-body">生成 LayaAir 资源（场景层级、<code>.lm</code> 网格、<code>.lmat</code> 材质、<code>.lani</code> 动画、纹理、<code>_src_</code> 脚本等）。</div></li>
+      <li><div class="st-title">导入 LayaAir 工程</div><div class="st-body">将产物拷入 LayaAir 3.x 项目资源目录使用；不支持的组件会在 Console 与完成对话框中列出，需在 Laya 端补做。</div></li>
+    </ol>
+  </section>
+
+  <footer class="page">
+    <p>官方文档：<a href="https://layaair.com/3.x/doc/3D/advanced/Unity/readme.html">layaair.com/3.x/doc/3D/advanced/Unity</a> · 本页基于插件 1.1.7 源码整理。</p>
+  </footer>
+
+</div>
+</body>
+</html>
