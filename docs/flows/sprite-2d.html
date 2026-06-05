@@ -3,24 +3,156 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>2D Sprite 导出流程 · SpriteRenderer → UI3D + Mesh2DRender</title>
+<title>2D 精灵导出 · SpriteRenderer → UI3D</title>
 <link rel="stylesheet" href="../style.css">
 </head>
 <body>
 <div class="wrap">
+
   <a class="back-link" href="../index.html"><span>←</span> 返回能力一览</a>
-  <div class="placeholder">
-    <div class="ph-icon">🖼️</div>
-    <span class="ph-tag">待补充</span>
-    <h1>2D Sprite 导出流程 · SpriteRenderer → UI3D + Mesh2DRender</h1>
-    <p>本页将梳理：SpriteRenderer → UI3D + 2D 预制体生成、整图 vs 子区域（图集 .atlas）分支、默认/自定义 2D 材质选择、颜色动画 Animator2D 接入，以及预制体变体去重。</p>
-    <div class="skeleton">
-      <div class="sk-bar w85"></div>
-      <div class="sk-bar"></div>
-      <div class="sk-bar w70"></div>
-      <div class="sk-bar w50"></div>
+
+  <header class="page">
+    <p class="eyebrow">核心原理 · 2D 精灵导出</p>
+    <h1>2D 精灵（SpriteRenderer）导出</h1>
+    <div class="meta-row">
+      <span><b>入口</b> <code>GetSpriteRendererComponentData</code></span>
+      <span><b>组件</b> <code>UI3D</code> → <code>.lh</code>（Mesh2DRender）</span>
+      <span><b>图集</b> <code>.atlas</code>（子图时）</span>
     </div>
+  </header>
+
+  <div class="note" style="background:#f4f7ff;border-color:#cfe0ff;">
+    <b>本章思路：</b>将 3D 场景中的 2D 精灵（SpriteRenderer）导出到 Laya，按「外层结构 → 贴图 → 内层预制 → 复用 → 边界」展开：① 外层结构——SpriteRenderer 导为 UI3D，引用一个 2D 预制 → ② 贴图引用方式（整图直引 / 子区域出图集）→ ③ 2D 预制内部结构 → ④ 变体去重与色彩动画 → ⑤ 不导出的情形。
   </div>
+
+  <div class="note">
+    <b>本页实测：</b>把 <code>EllenHealth</code>（Game Kit 的 HUD 精灵，是一张含 9 个子图的 spritesheet）拖进场景做演示。
+    导出产物：场景里一个 <b>UI3D</b> 组件 + 2D 预制 <code>EllenHealth_EllenHealth_Empty_sprite.lh</code> + 图集 <code>EllenHealth.atlas</code>。
+  </div>
+
+  <nav class="toc">
+    <b class="toc-label">本页梳理</b>
+    <a href="#s1">① SpriteRenderer → UI3D</a>
+    <a href="#s2">② 整图 vs 图集</a>
+    <a href="#s3">③ 2D 预制</a>
+    <a href="#s4">④ 变体去重 · 色彩</a>
+    <a href="#s5">⑤ 不导出情况</a>
+  </nav>
+
+  <!-- ① SpriteRenderer → UI3D -->
+  <section class="group" id="s1">
+    <div class="group-head">
+      <div class="gh-left"><h2>① SpriteRenderer → UI3D + 2D 预制</h2></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>外层结构——SpriteRenderer 导为 UI3D（节点仍是 Sprite3D、保留 3D 变换），UI3D 引用一个 2D 预制。</b>
+      SpriteRenderer 导出成 <b>UI3D 组件</b>（节点仍是 Sprite3D，保留 3D 变换，<code>localScale.x</code> 取负做左右手坐标补偿）。
+      UI3D 引用一个 <code>.lh</code> 2D 预制，预制里是带 <b>Mesh2DRender</b> 的精灵：贴图来自导出的图，颜色取自 <code>SpriteRenderer.color</code>，
+      2D 材质用自动生成的默认材质 <code>Mesh2DRender_DefaultMaterial.lmat</code>（一次生成、复用）。
+    </p>
+
+    <div class="shot-pair">
+      <figure class="shot">
+        <img src="../img/sprite-2d-renderer.png" alt="Unity SpriteRenderer">
+        <figcaption><b>导出前 · Unity：</b><code>SpriteRenderer</code>——精灵 <code>EllenHealth Empty</code>、颜色、绘制模式（简单）、材质 Sprites-Default。</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="../img/sprite-2d-laya.png" alt="Laya UI3D 组件">
+        <figcaption><b>导出后 · LayaAir：</b>同一节点带 <b>3D UI（UI3D）</b>组件，预制体指向 <code>..._sprite</code>，UI3D 渲染模式 = <code>透明(AlphaBlend)</code>——精灵在 3D 场景中渲染。</figcaption>
+      </figure>
+    </div>
+    <div class="note" style="margin:16px 22px 0;">
+      <b>2D 材质：</b>2D 精灵的渲染材质使用自动生成的默认 <code>baseRender2D</code> 材质（<code>Mesh2DRender_DefaultMaterial.lmat</code>，一次生成、全局复用）。
+      <code>SpriteRenderer</code> 上的自定义材质 / shader 不会作为预制体的 2D 渲染材质——画面表现按默认 2D 材质走。
+      自定义材质的透明 / 叠加属性参与判定 <b>UI3D 的渲染模式</b>（透明 AlphaBlend / 叠加 Additive）。
+    </div>
+  </section>
+
+  <!-- ② 整图 vs 图集 -->
+  <section class="group" id="s2">
+    <div class="group-head">
+      <div class="gh-left"><h2>② 整图 vs 图集</h2><span class="gh-desc">两种贴图引用方式</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>确定贴图引用方式——精灵占满整图则直引，精灵为大图子区域则导出 <code>.atlas</code> 并按子区域引用。</b>
+    </p>
+    <table>
+      <thead><tr><th>情况</th><th>导出方式</th></tr></thead>
+      <tbody>
+        <tr><td class="feat">精灵<b>占满整张贴图</b></td><td class="note">直接用<b>贴图 UUID</b>引用</td></tr>
+        <tr><td class="feat">精灵是贴图的<b>一部分</b>（spritesheet）</td><td class="note">导出一个 <code>.atlas</code> 文件（记录各子图在母图里的像素 rect）+ 用<b>子贴图 URL</b> 引用，并预加载该图集</td></tr>
+      </tbody>
+    </table>
+    <p style="padding:8px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      本例 <code>EllenHealth</code> 是 spritesheet → 走<b>图集模式</b>，导出 <code>EllenHealth.atlas</code>，同母图的多个子图<b>累加到同一个 atlas</b>：
+    </p>
+    <figure class="shot sm">
+      <img src="../img/sprite-2d-atlas.png" alt="导出的 atlas">
+      <figcaption><b>导出后 · LayaAir：</b><code>EllenHealth.atlas</code> 的帧列表——Empty / Full / Gaining00–03 / Losing00–02 共 9 个子图，都映射到母图 <code>EllenHealth.png</code>。</figcaption>
+    </figure>
+  </section>
+
+  <!-- ③ 2D 预制 -->
+  <section class="group" id="s3">
+    <div class="group-head">
+      <div class="gh-left"><h2>③ 2D 预制（.lh）</h2><span class="gh-desc">Mesh2DRender</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>UI3D 所引用的 2D 预制的内部结构（带 Mesh2DRender 的精灵）。</b>
+      UI3D 引用的 <code>.lh</code> 预制就是一个标准的 Laya 2D 节点（带 Mesh2DRender 的精灵）。世界尺寸按精灵自然边界
+      （像素 / pixelsPerUnit，Simple 绘制模式）或 size 属性换算，另算渲染分辨率。
+    </p>
+    <figure class="shot">
+      <img src="../img/sprite-2d-prefab.png" alt="导出的 2D 预制">
+      <figcaption><b>导出后 · LayaAir：</b>2D 预制 <code>EllenHealth_EllenHealth_Empty_sprite.lh</code>——一个带 Mesh2DRender 的精灵节点，UI3D 把它当画面内容渲染到 3D 场景里。</figcaption>
+    </figure>
+  </section>
+
+  <!-- ④ 变体去重 + 色彩动画 -->
+  <section class="group" id="s4">
+    <div class="group-head">
+      <div class="gh-left"><h2>④ 变体去重 · 色彩动画</h2></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>多个相同精灵复用同一预制与图集；色彩动画接入 Animator2D。</b>
+    </p>
+    <div class="callout-grid">
+      <div class="ci"><div class="n">A</div><div class="c">
+        <div class="t">变体去重</div>
+        <div class="d">同一精灵复用<b>同一个 <code>.lh</code> 预制</b>（多个物体引用同一精灵不重复导）；图集模式下同母图的多个子图<b>累加进同一个 <code>.atlas</code></b>。</div>
+      </div></div>
+      <div class="ci"><div class="n">B</div><div class="c">
+        <div class="t">色彩动画 → Animator2D</div>
+        <div class="d">SpriteRenderer 的颜色动画导成 2D <code>.mc</code> + Animator2D，附到 2D 预制上（详见 <a href="animation.html" style="color:var(--accent)">animation 页</a> ③）。</div>
+      </div></div>
+    </div>
+  </section>
+
+  <!-- ⑤ 跳过条件 -->
+  <section class="group" id="s5">
+    <div class="group-head">
+      <div class="gh-left"><h2>⑤ 不导出的情况</h2></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>能力边界——空 SpriteRenderer（未挂精灵或精灵无贴图）被跳过，属预期行为。</b>
+    </p>
+    <div class="note">
+      SpriteRenderer <b>没挂精灵</b>（Sprite 为空）或精灵<b>没有贴图</b> → 跳过该组件（导出时给警告）。
+    </div>
+    <div class="note" style="margin-top:12px;">
+      <b>运行时才赋图的空 SpriteRenderer 会被批量跳过——这是预期行为。</b>
+      像 Game Kit 这类项目里，很多 SpriteRenderer 的 Sprite 在<b>编辑器态是空的</b>（<code>fileID=0</code>），真正的图在<b>运行时由脚本赋值</b>。
+      导出器只读取<b>编辑器态的引用</b>，对这类空引用按上面的规则跳过并给出警告。
+      若发现一批精灵没被导出，可先确认它们的 Sprite 是否在编辑器里就为空、靠脚本运行时填充。
+    </div>
+  </section>
+
+  <footer class="page">
+    <p>官方文档：<a href="https://layaair.com/3.x/doc/3D/advanced/Unity/readme.html">layaair.com/3.x/doc/3D/advanced/Unity</a> · 本页基于插件 1.1.7 源码与实测整理。</p>
+  </footer>
+
 </div>
+
+<script src="../lightbox.js"></script>
 </body>
 </html>

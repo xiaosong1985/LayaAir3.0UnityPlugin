@@ -359,3 +359,51 @@ footer.page a { color: var(--accent); text-decoration: none; }
   td.target::before { content: "→ "; color: var(--text-faint); }
   .group-head { flex-direction: column; align-items: flex-start; }
 }
+
+/* ===========================================================
+   流程详情页 · 截图卡片 & 点击放大预览（共享）
+   配合 lightbox.js 使用
+   =========================================================== */
+.shot { margin: 18px auto; max-width: 720px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); background: #fff; }
+.shot img { display: block; width: 100%; height: auto; cursor: zoom-in; transition: opacity .15s ease; }
+.shot img:hover { opacity: .92; }
+.shot figcaption { padding: 9px 14px; font-size: 12.5px; color: var(--text-faint); background: #fafbfc; border-top: 1px solid var(--border); }
+.shot figcaption b { color: var(--text-soft); font-weight: 600; }
+.shot.sm { max-width: 440px; }
+.shot-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 18px auto; max-width: 760px; align-items: start; }
+.shot-pair .shot { margin: 0; max-width: none; }
+@media (max-width: 720px) { .shot-pair { grid-template-columns: 1fr; } }
+
+.lightbox { position: fixed; inset: 0; background: rgba(10,14,20,.88); display: none; align-items: center; justify-content: center; z-index: 1000; cursor: zoom-out; padding: 40px; }
+.lightbox.open { display: flex; }
+.lightbox img { max-width: 96%; max-height: 90%; border-radius: 8px; box-shadow: 0 10px 50px rgba(0,0,0,.55); }
+.lightbox .lb-cap { position: absolute; bottom: 20px; left: 0; right: 0; text-align: center; color: #d7dbe0; font-size: 13px; padding: 0 40px; }
+.lightbox .lb-close { position: absolute; top: 16px; right: 26px; color: #fff; font-size: 34px; line-height: 1; font-weight: 300; cursor: pointer; opacity: .8; }
+.lightbox .lb-close:hover { opacity: 1; }
+
+/* ===========================================================
+   代码块 · 源码 / GLSL 展示（共享，custom-shader 等页使用）
+   =========================================================== */
+.code { margin: 16px 22px; border: 1px solid #2b3442; border-radius: 10px; overflow: hidden; background: #1b212c; box-shadow: var(--shadow); }
+.code .cap { display: flex; align-items: center; gap: 9px; padding: 8px 14px; background: #151a23; border-bottom: 1px solid #2b3442; font-size: 12px; color: #8a93a0; font-weight: 600; }
+.code .cap .pill { font-size: 10.5px; font-weight: 700; padding: 1px 9px; border-radius: 999px; letter-spacing: .02em; }
+.code .cap .pill.in  { background: #2a3a4d; color: #9fcbff; }
+.code .cap .pill.out { background: #3c3320; color: #f0c674; }
+.code pre { margin: 0; padding: 13px 16px; overflow-x: auto; font-family: "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace; font-size: 12px; line-height: 1.7; color: #c6cede; tab-size: 2; }
+.code pre .c  { color: #5d6b7e; font-style: italic; }   /* 原注释 */
+.code pre .e  { color: #ff7b86; font-weight: 600; }      /* 问题标注 */
+.code pre .ok { color: #8fd178; }                         /* 正确点 */
+.code-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 22px; }
+.code-cols .code { margin: 0; }
+@media (max-width: 720px) { .code-cols { grid-template-columns: 1fr; } }
+
+/* ===========================================================
+   本页梳理 · 迷你目录（共享，各 flow 页顶部使用，可点跳转）
+   =========================================================== */
+.toc { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 2px; margin: 18px 0; padding: 13px 18px; background: #fff; border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); font-size: 13.5px; }
+.toc .toc-label { font-weight: 700; color: var(--text); margin-right: 14px; letter-spacing: .01em; }
+.toc a { color: var(--text-soft); text-decoration: none; padding: 3px 9px; border-radius: 7px; transition: background .15s ease, color .15s ease; }
+.toc a:hover { color: var(--accent); background: #eef2ff; }
+.toc a:not(:last-of-type)::after { content: "·"; color: var(--text-faint); margin-left: 11px; pointer-events: none; }
+html { scroll-behavior: smooth; }
+section.group { scroll-margin-top: 16px; }

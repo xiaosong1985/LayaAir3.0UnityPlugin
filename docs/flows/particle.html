@@ -3,24 +3,229 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>粒子系统导出流程 · GPU / CPU 双路径</title>
+<title>粒子系统导出 · GPU / CPU 双路径</title>
 <link rel="stylesheet" href="../style.css">
+<style>
+  /* particle 页专属图解 */
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 22px; font-size: 13px; }
+  .flow .fb { background: #fff; border: 1px solid var(--border); border-radius: 7px; padding: 7px 11px; color: var(--text); }
+  .flow .fb.hl { background: #eef2ff; border-color: #cfe0ff; color: var(--accent); font-weight: 600; }
+  .flow .fa { color: var(--text-faint); }
+</style>
 </head>
 <body>
 <div class="wrap">
+
   <a class="back-link" href="../index.html"><span>←</span> 返回能力一览</a>
-  <div class="placeholder">
-    <div class="ph-icon">✨</div>
-    <span class="ph-tag">待补充</span>
-    <h1>粒子系统导出流程 · GPU / CPU 双路径</h1>
-    <p>本页将梳理：导出模式判定（对象设置 → 父级 → Trails/Noise/LimitVelocity 自动转 CPU → 全局默认）、GPU 路径（ShurikenParticleRenderer + 着色器模板）与 CPU 路径（Plus* 模块）的逐模块差异。</p>
-    <div class="skeleton">
-      <div class="sk-bar w85"></div>
-      <div class="sk-bar"></div>
-      <div class="sk-bar w70"></div>
-      <div class="sk-bar w50"></div>
+
+  <header class="page">
+    <p class="eyebrow">核心原理 · 粒子系统导出</p>
+    <h1>粒子系统导出</h1>
+    <div class="meta-row">
+      <span><b>分发</b> <code>ResoureMap</code>（<code>GetParticleExportMode</code>）</span>
+      <span><b>GPU</b> <code>LayaParticleExportV2</code></span>
+      <span><b>CPU</b> <code>ParticleSystemData</code></span>
     </div>
+  </header>
+
+  <div class="note" style="background:#f4f7ff;border-color:#cfe0ff;">
+    <b>本章思路：</b>粒子导出首先决定导出模式：① 模式决策（GPU 或 CPU）。其后分述两条路径：② GPU（Shuriken）、③ CPU；再说明 ④ 两条路径各自的材质类型，最后 ⑤ 列出触发 CPU 的模块（对应 ① 的判定）。
   </div>
+
+  <div class="note warn">
+    <b>适用范围：</b>本插件仅支持 Unity <b>内置 Shuriken 粒子系统</b>（<code>ParticleSystem</code> 组件，由
+    <code>GameObject → Effects → Particle System</code> 创建）。
+    <b>不支持 VFX Graph</b>（<code>VisualEffect</code> 组件 / <code>com.unity.visualeffectgraph</code> 包，节点图式 GPU 粒子）——
+    插件源码不识别该组件，场景中的 VFX Graph 物体会被直接跳过、不产生任何 Laya 产物。本页全部内容均针对 Shuriken 粒子。
+  </div>
+
+  <div class="note">
+    <b>前置条件（Laya 工程）：</b>导出工程需在 <b>项目设置 → 引擎模块</b> 中启用 <b>3D 粒子模块</b>（<code>laya.particle3D</code>）；
+    <b>CPU 粒子</b>另需安装官方扩展包 <code>com.layabox.cpu-particles</code>。两者就绪后，粒子方可在 Laya 中渲染。
+  </div>
+
+  <nav class="toc">
+    <b class="toc-label">本页梳理</b>
+    <a href="#s1">① 模式决策</a>
+    <a href="#s2">② GPU 路径</a>
+    <a href="#s3">③ CPU 路径</a>
+    <a href="#s4">④ 粒子材质</a>
+    <a href="#s5">⑤ 模块差异</a>
+  </nav>
+
+  <!-- ① 模式决策 -->
+  <section class="group" id="s1">
+    <div class="group-head">
+      <div class="gh-left"><h2>① 模式决策：GPU 还是 CPU</h2><span class="gh-desc">GetParticleExportMode</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>首步——每个粒子系统按规则确定走 GPU 还是 CPU。</b>
+      判定按<b>三级优先</b>决定导出模式：
+    </p>
+
+    <ol class="steps">
+      <li><div class="st-title">① 物体 / 父级挂了 <code>LayaParticleExportSetting</code> 组件</div>
+        <div class="st-body">用它的 <code>exportMode</code>（<code>ShurikenParticle=0</code> / <code>CPUParticle=1</code>）。沿父链向上查找。</div></li>
+      <li><div class="st-title">② 否则自动检测 <code>RequiresCPUParticle</code></div>
+        <div class="st-body">粒子用了 <b>Noise（噪声）/ Trails（拖尾）/ LimitVelocityOverLifetime（速度限制）</b> 任一 → <b>强制 CPU</b>（这些是 GPU 路径不支持的模块）。</div></li>
+      <li><div class="st-title">③ 否则用全局默认</div>
+        <div class="st-body"><code>ExportConfig.ParticleExportMode</code>，出厂默认 <code>0</code> = GPU（Shuriken）。</div></li>
+    </ol>
+
+    <figure class="shot">
+      <img src="../img/particle-export-mode.png" alt="导出窗口的粒子导出默认模式开关">
+      <figcaption><b>③ 全局默认：</b>导出窗口「其他设置」里的 <code>Particle Export Mode</code> 开关（<code>Shuriken (GPU)</code> / <code>CPU Particle</code>）——作用于没挂覆盖组件、也未命中自动检测的粒子。</figcaption>
+    </figure>
+
+    <figure class="shot sm">
+      <img src="../img/particle-export-setting.png" alt="LayaParticleExportSetting 组件">
+      <figcaption><b>① 手动指定：</b>给粒子物体加 <code>LayaAir / Particle Export Setting</code> 组件，<code>Export Mode</code> 下拉二选一：<code>Shuriken Particle</code>（GPU）/ <code>CPU Particle</code>。</figcaption>
+    </figure>
+
+    <p style="padding:8px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      第 ② 步自动切换时，导出会在 Unity Console 打印提示：
+    </p>
+    <div class="code">
+      <div class="cap"><span class="pill out">Unity Console</span> 自动切 CPU 提示</div>
+<pre>[LayaAir Export] '<span class="ok">StaffSwish</span>': 检测到 GPU 不支持的模块 [<span class="e">Noise</span>]，自动切换为 CPU 粒子导出。</pre>
+    </div>
+  </section>
+
+  <!-- ② GPU 路径 -->
+  <section class="group" id="s2">
+    <div class="group-head">
+      <div class="gh-left"><h2>② GPU 路径（Shuriken）</h2><span class="gh-desc">LayaParticleExportV2</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>默认路径——判定为 GPU 时导出 <code>ShurikenParticleRenderer</code>，逐模块映射。</b>
+      导出组件 <code>_$type: ShurikenParticleRenderer</code>，逐模块映射：
+      main / startLifetime / gravity / emission / shape / velocityOverLifetime / colorOverLifetime /
+      sizeOverLifetime / rotationOverLifetime / colorBySpeed / sizeBySpeed / forceOverLifetime / textureSheetAnimation。
+    </p>
+
+    <div class="shot sm">
+      <img src="../img/particle-system-inspector.png" alt="Unity 粒子系统检视器">
+      <figcaption><b>导出前 · Unity：</b>粒子系统检视器——持续时间 / 起始生命周期 / 起始速度、发射、突发、形状等模块，逐项导出到 Laya。</figcaption>
+    </div>
+
+    <p style="padding:8px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>渲染模式（<code>renderMode</code>）决定粒子面片如何朝向与成形</b>——面向相机的广告牌、沿速度方向拉伸，或用网格作为粒子。Unity 的渲染模式映射到 Laya 对应值如下：
+    </p>
+    <table>
+      <thead><tr><th>renderMode</th><th>值</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="feat">Billboard</td><td class="note">0</td><td class="note">默认，永远面向相机。<b>0 为默认值，不写入产物 JSON</b>（<code>if (renderMode != 0)</code> 才写字段）</td></tr>
+        <tr><td class="feat">Stretch</td><td class="note">1</td><td class="note">拉伸（带速度方向参数）</td></tr>
+        <tr><td class="feat">HorizontalBillboard</td><td class="note">2</td><td class="note">水平面片</td></tr>
+        <tr><td class="feat">VerticalBillboard</td><td class="note">3</td><td class="note">垂直面片</td></tr>
+        <tr><td class="feat">Mesh</td><td class="note">4</td><td class="note">用网格当粒子（<code>maxParticles × meshVertexCount</code> 即总顶点数）</td></tr>
+      </tbody>
+    </table>
+
+    <p style="padding:8px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>实测·导出后在 Laya 正确渲染：</b>一个默认 Billboard + 叠加（Additive）材质的 GPU 粒子，导出前后效果一致。
+    </p>
+    <div class="shot-pair">
+      <figure class="shot">
+        <img src="../img/particle-gpu-unity.png" alt="Unity 中的 GPU 粒子">
+        <figcaption><b>Unity：</b>默认粒子系统（Billboard，柔和圆形粒子）。</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="../img/particle-gpu-laya.png" alt="LayaAir 中的 GPU 粒子">
+        <figcaption><b>LayaAir：</b>导出后正常渲染，形态一致。材质产物 <code>"type":"PARTICLESHURIKEN"</code>、<code>materialRenderMode:3</code>（叠加）。</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ③ CPU 路径 -->
+  <section class="group" id="s3">
+    <div class="group-head">
+      <div class="gh-left"><h2>③ CPU 路径</h2><span class="gh-desc">ParticleSystemData · Plus* 模块</span></div>
+    </div>
+    <p style="padding:16px 22px 18px;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>判定为 CPU 时导出 <code>ParticleSystem</code> + <code>Plus*</code> 模块，表达 GPU 路径不支持的效果。</b>
+      顶层组件 <code>_$type: ParticleSystem</code>，子模块用 <b>Plus 命名</b>（Laya CPU 粒子模块）：
+      突发 <code>PlusBurst</code>、曲线关键帧 <code>FloatKeyframe</code>、网格粒子 <code>MeshItem</code> 等。
+      过程中做 Unity→Laya 语义转换，例如突发 <code>cycleCount=0</code>（Unity 的 Infinite）→ Laya <code>-1</code>（Infinite）。
+      CPU 路径能表达 GPU 不支持的 Noise / Trails / 速度限制，代价是 CPU 模拟开销。
+    </p>
+
+    <p style="padding:8px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>实测·导出后在 Laya 正确渲染：</b>给一个粒子勾上 <b>Noise（噪声）</b> 模块，命中自动检测被转为 CPU 导出，导出前后效果一致。
+    </p>
+    <div class="shot-pair">
+      <figure class="shot">
+        <img src="../img/particle-cpu-unity.png" alt="Unity 中的 CPU 粒子">
+        <figcaption><b>Unity：</b>含 Noise 模块的粒子，命中自动检测 → CPU 路径。</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="../img/particle-cpu-laya.png" alt="LayaAir 中的 CPU 粒子">
+        <figcaption><b>LayaAir：</b>导出后正常渲染，形态一致。材质产物 <code>"type":"CpuParticle3D"</code>。</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ④ 材质 -->
+  <section class="group" id="s4">
+    <div class="group-head">
+      <div class="gh-left"><h2>④ 粒子材质</h2><span class="gh-desc">两种 type</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>两条路径各对应一种粒子材质类型。</b>下表按导出情况列出对应的材质 <code>type</code>：
+    </p>
+    <table>
+      <thead><tr><th>情况</th><th>函数</th><th>材质 type</th></tr></thead>
+      <tbody>
+        <tr><td class="feat">GPU + shader 已注册</td><td class="note"><code>WriteParticleMaterial</code></td><td class="note"><code>PARTICLESHURIKEN</code></td></tr>
+        <tr><td class="feat">CPU 粒子</td><td class="note">CPU 路径</td><td class="note"><code>CpuParticle3D</code></td></tr>
+        <tr><td class="feat">shader 未注册 + 没开自定义 shader</td><td class="note"><code>WriteParticleMaterialGeneric</code></td><td class="note">回退内置粒子 shader</td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      <b>实测产物核对</b>（导出工程 <code>assets/.../Ellen/</code>）：<code>Respawn_Particle_Mat.lmat</code> → <code>"type":"PARTICLESHURIKEN"</code>（GPU）；
+      <code>Staff_Particle_Mat_cpu.lmat</code> → <code>"type":"CpuParticle3D"</code>（CPU）。两条路径各产一种材质类型。
+    </div>
+  </section>
+
+  <!-- ⑤ 逐模块差异 -->
+  <section class="group" id="s5">
+    <div class="group-head">
+      <div class="gh-left"><h2>⑤ 各模块支持差异</h2><span class="gh-desc">GPU / CPU 两条路径</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>各 Unity 粒子模块在两条路径下的支持情况如下。</b>GPU（Shuriken）只支持广告牌/网格 + 各 over Lifetime 这类，复杂模拟类模块需走 CPU；少数模块两条路径都不支持。
+    </p>
+    <table>
+      <thead><tr><th>Unity 模块</th><th>GPU 路径</th><th>CPU 路径</th></tr></thead>
+      <tbody>
+        <tr><td class="feat">Noise（噪声）</td><td><span class="badge no">✗</span></td><td><span class="badge full">✓</span></td></tr>
+        <tr><td class="feat">Trails（拖尾）</td><td><span class="badge no">✗</span></td><td><span class="badge full">✓</span></td></tr>
+        <tr><td class="feat">Limit Velocity over Lifetime（速度限制）</td><td><span class="badge no">✗</span></td><td><span class="badge full">✓</span></td></tr>
+        <tr><td class="feat">Inherit Velocity（继承速度）</td><td><span class="badge no">✗</span></td><td><span class="badge full">✓</span></td></tr>
+        <tr><td class="feat">Collision（碰撞）</td><td><span class="badge no">✗</span></td><td><span class="badge full">✓</span></td></tr>
+        <tr><td class="feat">Force over Lifetime（力）</td><td><span class="badge no">✗</span></td><td><span class="badge full">✓</span></td></tr>
+        <tr><td class="feat">Color / Size / Rotation by Speed（按速度变化）</td><td><span class="badge no">✗</span></td><td><span class="badge full">✓</span></td></tr>
+        <tr><td class="feat">External Forces（外力）</td><td><span class="badge no">✗</span></td><td><span class="badge full">✓</span></td></tr>
+        <tr><td class="feat">Sub Emitters（子发射器）</td><td><span class="badge no">✗</span></td><td><span class="badge full">✓</span></td></tr>
+        <tr><td class="feat">Lights（灯光）</td><td><span class="badge no">✗</span></td><td><span class="badge no">✗</span></td></tr>
+        <tr><td class="feat">Trigger（触发器）</td><td><span class="badge no">✗</span></td><td><span class="badge no">✗</span></td></tr>
+        <tr><td class="feat">Custom Data（自定义数据）</td><td><span class="badge no">✗</span></td><td><span class="badge no">✗</span></td></tr>
+        <tr><td class="feat">其余常规模块（发射 / 形状 / 各 over Lifetime…）</td><td><span class="badge full">✓</span></td><td><span class="badge full">✓</span></td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      <b>注意：插件自动转 CPU 只认 <code>Noise</code> / <code>Trails</code> / <code>速度限制（LimitVelocityOverLifetime）</code> 三者</b>（<code>RequiresCPUParticle</code>）。
+      其余 GPU 不支持的模块若要走 CPU，需手动给粒子挂 <code>LayaParticleExportSetting</code> 设为 <code>CPU Particle</code>；否则按 GPU 导出、该模块效果丢失。
+      <b>Lights / Trigger / Custom Data 两条路径都不支持。</b>
+    </div>
+  </section>
+
+  <footer class="page">
+    <p>官方文档：<a href="https://layaair.com/3.x/doc/3D/advanced/Unity/readme.html">layaair.com/3.x/doc/3D/advanced/Unity</a> · 本页基于插件 1.1.7 源码与实测整理。</p>
+  </footer>
+
 </div>
+
+<script src="../lightbox.js"></script>
 </body>
 </html>

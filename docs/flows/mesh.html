@@ -3,24 +3,321 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>网格导出流程 · Mesh / SkinnedMesh → .lm</title>
+<title>网格导出 · 顶点结构与蒙皮骨骼分组</title>
 <link rel="stylesheet" href="../style.css">
+<style>
+  /* mesh 页专属图解 */
+  .diagram { margin: 18px 22px; padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: #fafbfc; }
+  .diagram .dg-title { font-size: 13px; font-weight: 600; color: var(--text-soft); margin-bottom: 12px; }
+  .dg-box { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 13px; text-align: center; color: var(--text); }
+  .dg-arrow { text-align: center; color: var(--text-faint); font-size: 18px; margin: 6px 0; }
+  .bins { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .bin { background: #eef2ff; border: 1px solid #cfe0ff; border-radius: 8px; padding: 10px 8px; text-align: center; font-size: 12.5px; }
+  .bin .bh { font-weight: 700; color: var(--accent); }
+  .bin .bd { color: var(--text-soft); margin-top: 3px; font-size: 12px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 22px; font-size: 13px; }
+  .flow .fb { background: #fff; border: 1px solid var(--border); border-radius: 7px; padding: 7px 11px; color: var(--text); }
+  .flow .fb.hl { background: #eef2ff; border-color: #cfe0ff; color: var(--accent); font-weight: 600; }
+  .flow .fa { color: var(--text-faint); }
+  @media (max-width: 720px) { .bins { grid-template-columns: 1fr 1fr; } }
+</style>
 </head>
 <body>
 <div class="wrap">
+
   <a class="back-link" href="../index.html"><span>←</span> 返回能力一览</a>
-  <div class="placeholder">
-    <div class="ph-icon">🧊</div>
-    <span class="ph-tag">待补充</span>
-    <h1>网格导出流程 · Mesh / SkinnedMesh → .lm</h1>
-    <p>本页将梳理：顶点结构组织、坐标翻转、子网格索引区间、蒙皮骨骼 24 根分组与顶点复制、bindpose 处理，以及网格简化（QEM / 采样兜底）的完整流程。</p>
-    <div class="skeleton">
-      <div class="sk-bar w85"></div>
-      <div class="sk-bar"></div>
-      <div class="sk-bar w70"></div>
-      <div class="sk-bar w50"></div>
+
+  <header class="page">
+    <p class="eyebrow">核心原理 · 网格导出</p>
+    <h1>网格导出</h1>
+    <div class="meta-row">
+      <span><b>入口</b> <code>MeshFile.SaveFile</code> → <code>MeshUitls</code></span>
+      <span><b>格式</b> <code>LAYAMODEL:0501</code>（<code>.lm</code>）</span>
+      <span><b>两条路</b> 静态 <code>writeMesh</code> · 蒙皮 <code>writeSkinnerMesh</code></span>
     </div>
+  </header>
+
+  <div class="note" style="background:#f4f7ff;border-color:#cfe0ff;">
+    <b>本章思路：</b>网格导出将 Unity Mesh 的几何数据（顶点流、索引、骨骼绑定）写入 Laya 的 <code>.lm</code>，按以下顺序处理——
+    ① 枚举顶点属性并构建布局 → ② 左手系到右手系的坐标转换 → ③ 按材质划分子网格索引区间。<b>静态网格至此完成；</b>蒙皮网格额外处理
+    ④ 24 骨骼分组与跨堆顶点复制、⑤ bindpose 的等价变换。⑥ 为可选的网格简化。
   </div>
+
+  <div class="note">
+    <b>本页实测模型：</b>角色 <b>Ellen</b> 来自 Unity 官方免费示例项目
+    <a href="https://assetstore.unity.com/packages/templates/tutorials/3d-game-kit-lite-135162"><b>3D Game Kit Lite</b></a>（Unity Technologies，Asset Store 免费下载）。
+    下文的顶点数、骨骼数等均为该模型的真实导出数据。
+  </div>
+
+  <nav class="toc">
+    <b class="toc-label">本页梳理</b>
+    <a href="#s1">① 顶点结构</a>
+    <a href="#s2">② 坐标翻转</a>
+    <a href="#s3">③ 子网格索引</a>
+    <a href="#s4">④ 24 骨骼分组复制</a>
+    <a href="#s5">⑤ bindpose</a>
+    <a href="#s6">⑥ 网格简化</a>
+    <a href="#s7">⑦ 验证对比</a>
+  </nav>
+
+  <!-- ① 顶点结构 -->
+  <section class="group" id="s1">
+    <div class="group-head">
+      <div class="gh-left"><h2>① 顶点结构组织</h2><span class="gh-desc">探测顶点流，拼 vbDeclaration</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>首先枚举网格的顶点属性，据此构建顶点声明（<code>vbDeclaration</code>）并累加每顶点字节数。</b>除位置外，顶点可含法线、UV、颜色，蒙皮网格另含骨骼权重与索引。
+      下面是实测的 <code>Ellen_Body</code> 网格——
+      <b>18727 顶点、30320 三角形、1 子网格、85 骨骼</b>：
+    </p>
+
+    <figure class="shot sm">
+      <img src="../img/mesh-mesh-info.png" alt="Ellen_Body 网格详情">
+      <figcaption><b>Ellen_Body 网格信息：</b>顶点流（Position/Normal/Tangent/UV/BlendWeight/BlendIndices）、索引格式、子网格数、骨骼数一览。</figcaption>
+    </figure>
+
+    <table>
+      <thead><tr><th>顶点流</th><th>vbDeclaration</th><th>字节</th><th>受控开关（模型设置）</th></tr></thead>
+      <tbody>
+        <tr><td class="feat">位置</td><td class="target"><code>POSITION</code></td><td>12</td><td class="note">必有</td></tr>
+        <tr><td class="feat">法线</td><td class="target"><code>NORMAL</code></td><td>12</td><td class="note">忽略顶点法线 可剥离</td></tr>
+        <tr><td class="feat">颜色</td><td class="target"><code>COLOR</code></td><td>16</td><td class="note">忽略顶点颜色 可剥离</td></tr>
+        <tr><td class="feat">UV</td><td class="target"><code>UV</code></td><td>8</td><td class="note">忽略顶点 UV 可剥离</td></tr>
+        <tr><td class="feat">UV1</td><td class="target"><code>UV1</code></td><td>8</td><td class="note">光照贴图 UV（可自动生成）</td></tr>
+        <tr><td class="feat">骨骼权重 + 索引</td><td class="target"><code>BLENDWEIGHT,BLENDINDICES</code></td><td>16 + 4</td><td class="note">仅蒙皮网格；权重 <code>Float32×4</code>(16B)，索引<b>导出后压成 <code>Uint8×4</code></b>(4B)</td></tr>
+        <tr><td class="feat">切线</td><td class="target"><code>TANGENT</code></td><td>16</td><td class="note">忽略顶点切线 可剥离</td></tr>
+      </tbody>
+    </table>
+
+    <figure class="shot" style="max-width:340px;">
+      <img src="../img/mesh-model-settings.png" alt="导出工具模型设置">
+      <figcaption><b>模型设置折叠区：</b>四个剥离开关（UV / 颜色 / 法线 / 切线）减小体积；自动生成 UV1 补光照贴图 UV。</figcaption>
+    </figure>
+
+    <figure class="shot sm">
+      <img src="../img/mesh-import-settings.png" alt="模型导入设置">
+      <figcaption><b>前提 · 模型导入设置：</b>「读取/写入」需开启，导出时才能读到顶点数据；法线 / 切线 / 焊接顶点等设置也决定了上面表格里哪些顶点流存在。</figcaption>
+    </figure>
+
+    <div class="note">
+      <code>.lm</code> 是分区二进制（版本 → 内容信息 → 段落 → 字符 → 网格 → 子网格 → 字符数据 → VB → IB），
+      采用「先占位、记偏移、最后倒推回填」的写法。索引格式：顶点数 &gt; 65535 且为 UInt32 时用 32 位，否则 16 位（Ellen_Body 为 UInt16）。
+    </div>
+  </section>
+
+  <!-- ② 坐标翻转 -->
+  <section class="group" id="s2">
+    <div class="group-head">
+      <div class="gh-left"><h2>② 坐标翻转</h2><span class="gh-desc">左手系 → 右手系</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>顶点数据就绪后，先处理坐标系差异。</b>Unity 为左手系、LayaAir 为右手系，二者呈 X 轴镜像，空间数据需相应取反。各类数据处理如下：
+    </p>
+    <table>
+      <thead><tr><th>数据</th><th>处理</th></tr></thead>
+      <tbody>
+        <tr><td class="feat">位置 / 法线 / 切线</td><td class="note"><b>X 分量取反</b>（<code>-vertice.x</code> / <code>-normal.x</code> / <code>-tangent.x</code>）</td></tr>
+        <tr><td class="feat">UV</td><td class="note"><b>V 翻转</b>：<code>uv.y × -1 + 1</code>（Unity 纹理 V 向上，Laya 向下）</td></tr>
+        <tr><td class="feat">包围盒</td><td class="note"><code>-max.x, min.y, min.z, -min.x, max.y, max.z</code>（X 取反并交换 min/max）</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ③ 子网格 -->
+  <section class="group" id="s3">
+    <div class="group-head">
+      <div class="gh-left"><h2>③ 子网格索引区间</h2></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>网格按材质槽划分为多个子网格（SubMesh），每个子网格在索引缓冲中占一段区间。</b>区间记录起点 <code>ibStart</code> 与长度 <code>ibLength</code>（来自 <code>mesh.GetIndices(i)</code>）。
+      静态网格按原始顺序写出；蒙皮网格的区间在骨骼分组后重算。
+    </p>
+    <div class="note">
+      本页实例 <code>Ellen_Body</code> 只有 <b>1 个子网格</b>，所以是单段区间（单子网格时 <code>ibStart=0</code>、<code>ibLength</code>=全部索引）。
+      <b>一个模型挂多个材质</b>时会有多个子网格 → 多段区间，每段对应一个材质槽，运行时按区间分材质绘制。
+    </div>
+  </section>
+
+  <!-- ④ 24 骨骼分组 -->
+  <section class="group" id="s4">
+    <div class="group-head">
+      <div class="gh-left"><h2>④ 蒙皮 24 骨骼分组 + 顶点复制</h2><span class="gh-desc">本页核心</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>以下两节为蒙皮网格专属。</b>LayaAir 单次 drawcall 的骨骼矩阵上限为 <b>24 根</b>（uniform 限制），而角色骨骼常达上百根。
+      因此当子网格引用的骨骼超过 24 根时，需将其三角形拆分为多个骨骼数 ≤24 的分组、分批渲染。<code>Ellen_Body</code> 引用 <b>85 根</b>，需进行分组：
+    </p>
+
+    <figure class="shot sm">
+      <img src="../img/mesh-bones-tree.png" alt="Ellen 骨骼层级树">
+      <figcaption><b>Ellen 的骨骼树：</b>从 <code>Ellen_Root</code> 展开是上百根骨骼节点（手指、脸部、头发都独立成骨），<code>Ellen_Body</code> 引用其中 85 根。</figcaption>
+    </figure>
+
+    <figure class="shot sm">
+      <img src="../img/mesh-skinned-renderer.png" alt="蒙皮网格渲染器组件">
+      <figcaption><b>蒙皮网格渲染器：</b>导出时从这里读取 <code>bones</code> 列表（85 根）、根骨骼（Ellen Hips）与 sharedMesh，再做下面的分组。</figcaption>
+    </figure>
+
+    <div class="diagram">
+      <div class="dg-title">分组示意 · 一个 SubMesh 按骨骼拆堆（每堆 ≤ 24 根）</div>
+      <div class="dg-box">SubMesh #0 · 30320 三角形 · 引用 85 根骨骼</div>
+      <div class="dg-arrow">↓ 按三角形引用的骨骼分堆</div>
+      <div class="bins">
+        <div class="bin"><div class="bh">堆 ①</div><div class="bd">≤24 骨骼<br>一批三角形</div></div>
+        <div class="bin"><div class="bh">堆 ②</div><div class="bd">≤24 骨骼<br>一批三角形</div></div>
+        <div class="bin"><div class="bh">堆 ③</div><div class="bd">≤24 骨骼<br>一批三角形</div></div>
+        <div class="bin"><div class="bh">堆 ④</div><div class="bd">剩余骨骼<br>剩余三角形</div></div>
+      </div>
+    </div>
+
+    <p style="padding:4px 22px 0;margin:0;color:var(--text-soft);font-size:14px;"><b>分组算法</b>（<code>MaxBoneCount = 24</code>）：</p>
+    <ol class="steps">
+      <li><div class="st-title">取三角形的骨骼集合</div><div class="st-body">每个三角形 3 个顶点共引用最多 12 根骨骼（<code>triangleBoneIndex</code>）。</div></li>
+      <li><div class="st-title">尝试并入已有的堆（贪心）</div><div class="st-body">该堆已<b>全包含</b>这些骨骼 → 直接加入；否则若加入后<b>骨骼总数 ≤ 24</b> → 扩充该堆并加入；均不满足 → <b>新建一堆</b>。<br><span style="color:var(--text-faint)">注：取「第一个可容纳」的堆，属<b>贪心</b>策略，不保证堆数最少（即不保证 drawcall 最少）。</span></div></li>
+      <li><div class="st-title">顶点复制</div><div class="st-body">同一个顶点若被分到<b>不同的堆</b>，必须<b>复制一份</b>——因为它的 4 个 boneIndex 要改写成「在该堆局部骨骼表里的下标」，各堆下标不同（<code>checkPoint</code> 用 <code>commonPoint</code> 字典去重）。<b>这就是导出后顶点数可能多于 Unity 原始数的原因。</b></div></li>
+      <li><div class="st-title">索引重映射 + boneDic</div><div class="st-body">顶点的全局 boneIndex 改写为堆内局部下标（<code>changeBoneIndex</code>）；每个堆再写一张「局部 → 全局」骨骼映射表 <code>boneDic</code>，供运行时还原。</div></li>
+    </ol>
+
+    <div class="diagram">
+      <div class="dg-title">实证 · 顶点复制导致顶点数增加</div>
+      <div class="flow" style="margin:0;">
+        <span class="fb">Unity 原始<br><b>18727</b> 顶点</span>
+        <span class="fa">— 24 骨骼分组 / 跨堆复制 →</span>
+        <span class="fb hl">导出 .lm<br><b>19629</b> 顶点</span>
+        <span class="fa">=</span>
+        <span class="fb">多出 <b>902</b> 个<br>（被复制的顶点）</span>
+      </div>
+    </div>
+
+    <figure class="shot sm">
+      <img src="../img/mesh-lm-info.png" alt="导出后 .lm 网格信息">
+      <figcaption><b>导出后的 <code>.lm</code>（在 LayaAir 中查看）：</b>顶点数 <b>19629</b>（&gt; Unity 的 18727）、85 骨骼、Uint16 索引；<code>BLENDINDICES</code> 已从 UInt32 压成 <code>Uint8 × 4</code>（对应代码里的 <code>(byte)boneIndex</code>）。</figcaption>
+    </figure>
+
+    <div class="note">
+      <b>小结：</b>骨骼超 24 → 三角形分堆（每堆 ≤24 骨骼）→ 跨堆的顶点复制（18727→19629）→ boneIndex 按堆局部表重映射。
+    </div>
+  </section>
+
+  <!-- 静态 vs 蒙皮 对比 -->
+  <section class="group">
+    <div class="group-head">
+      <div class="gh-left"><h2>静态网格 vs 蒙皮网格</h2><span class="gh-desc">两条路的关键差异</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      普通 <code>MeshRenderer</code> 走 <code>writeMesh</code>，没有骨骼、不分组、<b>不复制顶点</b>；只有蒙皮网格才有上面那套。
+      拿一块 ProBuilder 地块 <code>pb_Mesh</code> 和 Ellen 对比，一眼看清：
+    </p>
+    <table>
+      <thead><tr><th>对比项</th><th>静态 · pb_Mesh（地块）</th><th>蒙皮 · Ellen_Body</th></tr></thead>
+      <tbody>
+        <tr><td class="feat">导出方法</td><td class="target"><code>writeMesh</code></td><td><code>writeSkinnerMesh</code></td></tr>
+        <tr><td class="feat">骨骼数</td><td class="target">0</td><td>85</td></tr>
+        <tr><td class="feat">导出前顶点</td><td class="target">729</td><td>18727</td></tr>
+        <tr><td class="feat">导出后顶点</td><td class="target"><b>729（不变）</b></td><td><b>19629（+902）</b></td></tr>
+        <tr><td class="feat">顶点复制</td><td class="target">无</td><td>有（24 骨骼分组所致）</td></tr>
+        <tr><td class="feat">子网格</td><td class="target">1</td><td>1</td></tr>
+      </tbody>
+    </table>
+
+    <div class="shot-pair">
+      <figure class="shot">
+        <img src="../img/mesh-static-info.png" alt="静态网格导出前信息">
+        <figcaption><b>导出前 · Unity：</b>地块网格 <code>pb_Mesh</code>，729 顶点、无骨骼，包围盒中心 <code>(25,0,25)</code>。</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="../img/mesh-static-lm.png" alt="静态网格导出后 .lm">
+        <figcaption><b>导出后 · .lm：</b>顶点仍是 <b>729</b>（无复制）、<code>Bones: 0</code>；包围盒中心变 <code>(-25,0,25)</code>——<b>X 已取反</b>，实证坐标翻转。</figcaption>
+      </figure>
+    </div>
+
+    <div class="note">
+      <b>核心差异：</b>静态网格顶点数<b>原样导出</b>（729→729）；蒙皮网格因 24 骨骼分组而<b>顶点增多</b>（18727→19629）。
+      导出后顶点数变多是 24 骨骼分组复制的预期结果。
+    </div>
+  </section>
+
+  <!-- ⑤ bindpose -->
+  <section class="group" id="s5">
+    <div class="group-head">
+      <div class="gh-left"><h2>⑤ bindpose 处理</h2><span class="gh-desc">绑定姿势的左右手等价变换</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>bindpose（绑定姿势矩阵）记录蒙皮时骨骼相对网格的初始变换，同属空间数据，需在坐标系转换下做等价变换。</b>因对象是矩阵，处理步骤较 ② 更多：
+    </p>
+    <div class="flow">
+      <span class="fb">bindpose</span><span class="fa">→</span>
+      <span class="fb">取逆</span><span class="fa">→</span>
+      <span class="fb">分解 TRS</span><span class="fa">→</span>
+      <span class="fb hl">position.x 取反<br>quaternion.x / w 取反</span><span class="fa">→</span>
+      <span class="fb">归一化 + 重组</span><span class="fa">→</span>
+      <span class="fb">再取逆</span><span class="fa">→</span>
+      <span class="fb">inverseGlobalBindPoses</span>
+    </div>
+    <div class="note">
+      <b><code>position.x</code> 与 <code>quaternion</code> 的 x、w 取反的原因：</b>Unity 采用<b>左手系</b>、LayaAir 采用<b>右手系</b>，二者差异等价于将整个空间沿 X 轴镜像一次。
+      镜像下，平移只需把 <b>position.x 取反</b>（其余分量不变）；而旋转在左右手系之间不是简单镜像——同一个物理转动，换手系后等价于对四元数的 <code>x</code> 与 <code>w</code> 分量取反（<code>y、z</code> 保持不变），才能表示「翻转后看起来一样」的那次旋转。
+      所以这里不是随手抄的公式，而是「让翻转前后骨骼朝向保持一致」的等价变换；缩放不含手性、无需处理。先取逆是为了把 bindpose 还原成正向的骨骼变换、翻转完再取逆装回 <code>inverseGlobalBindPoses</code>。
+    </div>
+  </section>
+
+  <!-- ⑥ 网格简化 -->
+  <section class="group" id="s6">
+    <div class="group-head">
+      <div class="gh-left"><h2>⑥ 网格简化</h2><span class="gh-desc">QEM 优先 / 采样兜底</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>可选步骤：顶点数过多时对网格做减面简化。</b>普通网格导出默认不简化，该机制主要用于粒子网格顶点超限时的兜底。提供两种策略：
+    </p>
+    <table>
+      <thead><tr><th>策略</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="feat">QEM（优先）<span class="badge full" style="margin-left:6px;">高质量</span></td><td class="note">调 <code>UnityMeshSimplifier</code> 库的二次误差度量算法（需另装 <code>UnityMeshSimplifier</code> 包并开启 <code>UNITY_MESH_SIMPLIFIER</code> 编译宏，<code>MeshSimplifier.cs</code>），保形好</td></tr>
+        <tr><td class="feat">抽取三角形（兜底）</td><td class="note"><code>SimplifyByVertexSampling</code>——库不可用时退化为抽取三角形，质量较低</td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      主要用途：<b>粒子系统 mesh 顶点超限时自动简化</b>（导出面板「自定义 Shader 设置」下的粒子 Mesh 优化，需 <code>ENABLE_PARTICLE_MESH_OPTIMIZATION</code> 宏）。
+      普通网格导出默认<b>不</b>简化。
+    </div>
+    <div class="note" style="margin-top:12px;">
+      <b>当前版本 · 两个独立编译宏：</b>粒子 Mesh 优化功能由 <code>ENABLE_PARTICLE_MESH_OPTIMIZATION</code> 控制（<b>默认未启用</b>，故导出面板上不显示该开关）——
+      在项目脚本编译符号（Scripting Define Symbols）里加上它即可启用。<b>高质量 QEM</b> 则另由 <code>UNITY_MESH_SIMPLIFIER</code> 控制：需再加该宏并安装 <code>UnityMeshSimplifier</code> 包，否则简化退化为采样兜底（见上表）。
+    </div>
+  </section>
+
+  <!-- ⑦ 验证：导出前后对比 -->
+  <section class="group" id="s7">
+    <div class="group-head">
+      <div class="gh-left"><h2>⑦ 验证 · 导出前后对比</h2><span class="gh-desc">Unity 网格 ↔ LayaAir 渲染</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      同一个 Ellen 模型，导出前后并排对比——网格形状一致，证明顶点 / 三角形 / 骨骼绑定正确还原：
+    </p>
+
+    <div class="shot-pair">
+      <figure class="shot">
+        <img src="../img/mesh-wireframe.png" alt="导出前 Unity 网格线框">
+        <figcaption><b>导出前 · Unity：</b>Scene 视图「着色线框」下的网格拓扑（顶点 / 三角形）。</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="../img/mesh-laya-render.png" alt="导出后 LayaAir 渲染">
+        <figcaption><b>导出后 · LayaAir：</b>同一 Ellen 网格 + 法杖在引擎中还原渲染，形状一致。</figcaption>
+      </figure>
+    </div>
+
+    <figure class="shot" style="max-width:420px;">
+      <img src="../img/mesh-output-lm.png" alt="导出的 .lm 模型文件">
+      <figcaption><b>产物 <code>.lm</code>：</b>导出目录 <code>Models/</code> 下，每个网格一个文件——如 <code>Ellen-Ellen_Body</code>、<code>Staff-Staff_Body</code>。</figcaption>
+    </figure>
+  </section>
+
+  <footer class="page">
+    <p>官方文档：<a href="https://layaair.com/3.x/doc/3D/advanced/Unity/readme.html">layaair.com/3.x/doc/3D/advanced/Unity</a> · 本页基于插件 1.1.7 源码与实测整理。</p>
+  </footer>
+
 </div>
+
+<script src="../lightbox.js"></script>
 </body>
 </html>

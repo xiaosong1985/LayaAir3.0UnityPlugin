@@ -3,24 +3,138 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>动画导出流程 · .lani / .mc / .mcc</title>
+<title>动画导出 · 曲线 / 状态机 / .lani</title>
 <link rel="stylesheet" href="../style.css">
 </head>
 <body>
 <div class="wrap">
+
   <a class="back-link" href="../index.html"><span>←</span> 返回能力一览</a>
-  <div class="placeholder">
-    <div class="ph-icon">🎞️</div>
-    <span class="ph-tag">待补充</span>
-    <h1>动画导出流程 · .lani / .mc / .mcc</h1>
-    <p>本页将梳理：曲线绑定按类型分发（Transform / 材质 / Camera / 脚本 / 粒子）、3D 属性动画 .lani 写入、SpriteRenderer 颜色动画分流到 2D .mc/.mcc，以及 Animator 状态机导出。</p>
-    <div class="skeleton">
-      <div class="sk-bar w85"></div>
-      <div class="sk-bar"></div>
-      <div class="sk-bar w70"></div>
-      <div class="sk-bar w50"></div>
+
+  <header class="page">
+    <p class="eyebrow">核心原理 · 动画导出</p>
+    <h1>动画导出</h1>
+    <div class="meta-row">
+      <span><b>入口</b> <code>ResoureMap.GetAnimatorComponentData</code></span>
+      <span><b>曲线</b> <code>AnimationCurveGroup</code> → <code>.lani</code></span>
+      <span><b>2D</b> <code>AnimClip2DFile</code>（<code>.mc</code>）</span>
     </div>
+  </header>
+
+  <div class="note" style="background:#f4f7ff;border-color:#cfe0ff;">
+    <b>本章思路：</b>Unity 动画数据按类型走不同导出路径：① 属性曲线写入 <code>.lani</code> → ② Animator 状态机将片段组织为状态与转换 → ③ SpriteRenderer 色彩动画为特例，分流至 2D 的 <code>.mc</code> → ④ 能力边界：不导出 BlendTree。
   </div>
+
+  <div class="note">
+    <b>本页实测：</b>3D Game Kit <b>Ellen</b> 的 Animator。其状态机有 <code>Respawn</code> / <code>EllenDeath</code>（各直接挂一个 clip）、
+    <code>BeginResapwn</code>、<code>Hurt</code>（一个 <b>BlendTree</b>）。导出后：<b>Death、Spawn 两个动画正常</b>，Hurt 因是混合树<b>导成空状态</b>。
+  </div>
+
+  <nav class="toc">
+    <b class="toc-label">本页梳理</b>
+    <a href="#s1">① 曲线 → .lani</a>
+    <a href="#s2">② 状态机</a>
+    <a href="#s3">③ 色彩动画 → 2D</a>
+    <a href="#s4">④ BlendTree 边界</a>
+  </nav>
+
+  <!-- ① 曲线 → .lani -->
+  <section class="group" id="s1">
+    <div class="group-head">
+      <div class="gh-left"><h2>① 曲线 → .lani（按属性名分发类型）</h2><span class="gh-desc">AnimationCurveGroup</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>基础——将各属性动画曲线按类型分类，写入 <code>.lani</code> 二进制；后续状态机组织的即此处产出的动画片段。</b>
+      Transform 类曲线按 <code>propertyName</code> 归到一个 <code>KeyFrameValueType</code>，再写进 <code>.lani</code> 二进制（path 索引表 + propertyName 索引表 + 关键帧）；
+      材质类（Color / MaterialSwap）则按 <b>shader 属性配置表</b>匹配分发，并非纯属性名命中。
+      坐标系转换在曲线层完成（左手系 → 右手系），<b>各属性按下表对相应分量取负</b>，并非整套 xyz 重排（与 <a href="mesh.html" style="color:var(--accent)">mesh 页</a> 的 X 镜像同源）。
+    </p>
+
+    <figure class="shot sm">
+      <img src="../img/animation-clip-curves.png" alt="Unity 动画曲线列表">
+      <figcaption><b>导出前 · Unity：</b>一个 clip 的曲线绑定——每根骨骼带 <b>位置 / 旋转 / 缩放</b>（即下表的 Position / Rotation / Scale）。这些逐条转成 <code>.lani</code> 的关键帧。</figcaption>
+    </figure>
+
+    <table>
+      <thead><tr><th>Unity 属性</th><th>Laya 类型</th><th>分量顺序</th><th>坐标转换</th></tr></thead>
+      <tbody>
+        <tr><td class="feat"><code>m_LocalPosition</code></td><td class="note">Position</td><td class="note"><code>x, y, z</code></td><td class="note">X 取负</td></tr>
+        <tr><td class="feat"><code>m_LocalScale</code></td><td class="note">Scale</td><td class="note"><code>x, y, z</code></td><td class="note">无<sup>※</sup></td></tr>
+        <tr><td class="feat"><code>localEulerAnglesRaw</code></td><td class="note">RotationEuler</td><td class="note"><code>x, y, z</code></td><td class="note">Y、Z 取负</td></tr>
+        <tr><td class="feat"><code>m_LocalRotation</code></td><td class="note">Rotation（四元数）</td><td class="note"><code>x, y, z, w</code></td><td class="note">X、W 取负</td></tr>
+        <tr><td class="feat"><code>material._Color</code></td><td class="note">Color</td><td class="note"><code>r, g, b, a</code>（缺 a 默认 1.0）</td><td class="note">无</td></tr>
+        <tr><td class="feat"><code>m_Materials</code> / <code>sharedMaterials</code></td><td class="note">MaterialSwap（=11）</td><td class="note" colspan="2">材质引用切换（.lmat 路径）</td></tr>
+      </tbody>
+    </table>
+    <p style="padding:12px 22px 0;margin:0;color:var(--text-soft);font-size:13px;">
+      <sup>※</sup> 普通 3D 节点 Scale <b>不做任何取负</b>。只有挂了 <code>SpriteRenderer</code> 的节点（其静态 <code>localScale.x</code> 也被取负）才会把 <code>scale.x</code> 关键帧取负，以与静态变换保持一致。
+    </p>
+  </section>
+
+  <!-- ② Animator 状态机 -->
+  <section class="group" id="s2">
+    <div class="group-head">
+      <div class="gh-left"><h2>② Animator 状态机</h2><span class="gh-desc">GetAnimaterLayerData</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>将上一步产出的片段组织为「状态 + 转换」的状态机。</b>
+      每层（layer）导出状态列表 + 转换。<b>状态</b>：<code>speed</code> / <code>clipStart=0</code> / <code>clipEnd=1</code> / 位置 x,y /
+      <code>clip</code>（指向 <code>.lani</code> 的 uuid）/ id。取 clip 用 <code>state.motion as AnimationClip</code>。
+      <b>转换</b>（soloTransitions）：<code>exitByTime</code> / <code>exitTime</code> / <code>transduration</code> / <code>transstartoffset</code> / <code>solo</code> / <code>mute</code>；目标状态 null 或不存在 → 警告跳过。
+    </p>
+
+    <div class="shot-pair">
+      <figure class="shot">
+        <img src="../img/animation-controller.png" alt="Unity Animator 状态机">
+        <figcaption><b>导出前 · Unity：</b>Ellen 状态机——<code>Respawn</code>（默认）/ <code>BeginResapwn</code> / <code>EllenDeath</code> / <code>Hurt</code> + Any State。</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="../img/animation-laya-controller.png" alt="Laya 导出的状态机">
+        <figcaption><b>导出后 · LayaAir：</b>状态机结构<b>前后一致</b>——状态、连线、默认状态（Respawn）都忠实转移。（<code>Hurt</code> 的 BlendTree 内容例外，见 ④）</figcaption>
+      </figure>
+    </div>
+    <div class="note">状态图的<b>骨架（状态 / 转换 / 默认状态）忠实转移</b>，Unity ↔ Laya 一一对应；差异只在 BlendTree 状态的内容（④）。</div>
+  </section>
+
+  <!-- ③ 2D 色彩动画 -->
+  <section class="group" id="s3">
+    <div class="group-head">
+      <div class="gh-left"><h2>③ SpriteRenderer 色彩动画 → 2D（.mc）</h2></div>
+    </div>
+    <p style="padding:16px 22px 18px;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>特例——精灵的色彩动画不走 3D 路径，分流至 2D 的 <code>.mc</code>。</b>
+      子物体含 SpriteRenderer 色彩动画时，若只有色彩动画，3D Animator 跳过，改由 <b>Animator2D</b> + <code>.mc</code>（<code>LAYAANIMATION2D:01</code>）导出；
+      3D / 2D 动画都有时，给状态挂同步脚本（<code>syncScriptUuid</code>）保持播放同步。细节见 <a href="sprite-2d.html" style="color:var(--accent)">sprite-2d 页</a>。
+    </p>
+  </section>
+
+  <!-- ④ 不支持 BlendTree -->
+  <section class="group" id="s4">
+    <div class="group-head">
+      <div class="gh-left"><h2>④ 不支持：BlendTree（混合树）</h2><span class="gh-desc">能力边界</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>能力边界——当前版本不导出 BlendTree。</b>
+      插件<b>不导出 Animator 的 BlendTree（混合树）</b>。状态机中 motion 为 BlendTree 的状态会被导成<b>空状态（无动画）</b>，
+      混合树内引用的 clip 也<b>不会随之导出</b>。其余「直接挂单个 AnimationClip」的状态（如本例 Death / Spawn）导出正常。
+    </p>
+
+    <figure class="shot">
+      <img src="../img/animation-blendtree.png" alt="Ellen Hurt BlendTree">
+      <figcaption>Ellen 的 <code>Hurt</code> 状态是 <code>HurtBlendTree</code>（含 8 个方向受击）——这类混合树及其内部 clip <b>不会被导出</b>，<code>Hurt</code> 在 Laya 端为空状态。</figcaption>
+    </figure>
+
+    <div class="note">
+      <b>导出建议：</b>需要这些动画在 Laya 播放时，请在 Unity 里把它们从 BlendTree 改成<b>「直接挂单个 AnimationClip」的状态</b>再导出。
+    </div>
+  </section>
+
+  <footer class="page">
+    <p>官方文档：<a href="https://layaair.com/3.x/doc/3D/advanced/Unity/readme.html">layaair.com/3.x/doc/3D/advanced/Unity</a> · 本页基于插件 1.1.7 源码与实测整理。</p>
+  </footer>
+
 </div>
+
+<script src="../lightbox.js"></script>
 </body>
 </html>

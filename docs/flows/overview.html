@@ -8,19 +8,239 @@
 </head>
 <body>
 <div class="wrap">
+
   <a class="back-link" href="../index.html"><span>←</span> 返回能力一览</a>
-  <div class="placeholder">
-    <div class="ph-icon">🗺️</div>
-    <span class="ph-tag">待补充</span>
-    <h1>整体导出流程 · 场景遍历与组件分发</h1>
-    <p>本页将梳理：导出入口 → 场景/预制体遍历（HierarchyFile）→ 节点映射（NodeMap）→ 组件分发链（ResoureMap.writeComponentData）→ 资源文件落盘 的完整链路与坐标系转换。</p>
-    <div class="skeleton">
-      <div class="sk-bar w85"></div>
-      <div class="sk-bar"></div>
-      <div class="sk-bar w70"></div>
-      <div class="sk-bar w50"></div>
+
+  <header class="page">
+    <p class="eyebrow">核心原理 · 导出主链路</p>
+    <h1>整体导出流程</h1>
+    <div class="meta-row">
+      <span><b>入口</b> <code>LayaAir3Export.ExportScene()</code></span>
+      <span><b>核心类</b> <code>HierarchyFile</code> · <code>NodeMap</code> · <code>ResoureMap</code></span>
+      <span><b>产物</b> <code>.ls</code> / <code>.lh</code> / <code>.lm</code> / <code>.lmat</code> / <code>.lani</code> …</span>
     </div>
+  </header>
+
+  <div class="note" style="background:#f4f7ff;border-color:#cfe0ff;">
+    <b>本章思路：</b>本章是整个导出流程的全景。点「导出」后，插件执行一条流水线：遍历当前场景的对象 → 展开为节点表并建立父子树 → 逐组件按类型分发给对应导出器 → 落盘成文件，全程进行左手系到右手系的坐标转换。① 给出主链路全景；②③④ 分别展开其中的组件分发、坐标转换与产物类型；⑤ 以实测场景验证整条链路。其余各页（网格 / 材质 / 动画…）是 ② 分发链中各类组件的深入说明。
   </div>
+
+  <figure class="shot">
+    <img src="../img/overview-entry.png" alt="Unity 编辑器中打开导出工具">
+    <figcaption><b>导出入口：</b>Unity 菜单 <code>LayaAir3D 3.0 / Export Tool</code> 打开导出窗口；左侧 Hierarchy 即待导出的场景层级，场景视图为 3D Game Kit Lite 关卡。</figcaption>
+  </figure>
+
+  <nav class="toc">
+    <b class="toc-label">本页梳理</b>
+    <a href="#s1">① 导出主链路</a>
+    <a href="#s2">② 组件分发链</a>
+    <a href="#s3">③ 坐标系转换</a>
+    <a href="#s4">④ 产物文件类型</a>
+    <a href="#s5">⑤ 实测验证</a>
+  </nav>
+
+  <!-- ① 主链路 -->
+  <section class="group" id="s1">
+    <div class="group-head">
+      <div class="gh-left"><h2>① 导出主链路</h2><span class="gh-desc">从按钮到落盘的 6 个阶段</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>本节给出整条流水线的全景：从点下「导出」到文件落盘，插件依次走过六个阶段。</b>本节先建立从入口到产物的整体脉络，②③④ 再分别展开其中的关键环节。六个阶段依次为——入口与配置 → 多场景循环 → 层级收集（展开为节点列表）→ 节点映射与建树 → 组件分发 → 落盘。
+    </p>
+    <ol class="steps">
+      <li>
+        <div class="st-title">入口与配置 · <code>LayaAir3D.OnGUI</code> → <code>ExportScene()</code></div>
+        <div class="st-body">
+          导出窗口（菜单 <code>LayaAir3D 3.0 / Export Tool</code>）顶部切「导出为场景 / 导出为预设」，下含
+          <b>节点设置 / 模型设置 / 其他设置 / 自定义 Shader 设置 / 组件脚本导出配置</b> 五个折叠区与保存路径。
+          点导出按钮 → <code>LayaAir3Export.ExportScene()</code>。
+        </div>
+      </li>
+      <li>
+        <div class="st-title">初始化与多场景循环 · <code>ExportScene()</code></div>
+        <div class="st-body">
+          先初始化各工具类（<code>GameObjectUitls</code> / <code>MetarialUitls</code> / <code>AnimationCurveGroup</code> /
+          <code>UnsupportedFeatureCollector</code>，并清空自定义 Shader 缓存），再遍历<b>当前所有已打开场景</b>。
+          <b>仅导出已保存的场景</b>：路径为空（未保存）的场景不在导出范围内。每个场景构造一个
+          <code>HierarchyFile</code> 并调用 <code>saveAllFile()</code>。
+        </div>
+      </li>
+      <li>
+        <div class="st-title">层级收集 · <code>HierarchyFile</code> 构造</div>
+        <div class="st-body">
+          从场景根对象递归把整棵树<b>拍平成节点列表</b>。其间两类节点被整体跳过：勾了「忽略未激活节点」时的非激活物体；
+          以及<b>带 <code>Canvas</code> 的对象及其整棵子树</b>（UI 2D 暂未启用）。随后建立总资源表 <code>ResoureMap</code>，
+          并为每个对象登记进 <code>NodeMap</code>。
+        </div>
+      </li>
+      <li>
+        <div class="st-title">节点映射与建树 · <code>NodeMap</code> → <code>ResoureMap.createNodeTree()</code></div>
+        <div class="st-body">
+          每个 GameObject 生成基础节点 JSON 并分配自增 <code>_$id</code>（<code>#0</code>=Scene2D、<code>#1</code>=Scene3D 预留，业务节点从 <code>#2</code> 起）。
+          场景模式直接导出实例内容；预制体模式则检测预制体实例根、写 <code>_$prefab</code> 引用。
+          之后按父子关系挂成 <code>_$child</code> 树，并逐节点调 <code>writeCompoent()</code> 写组件。
+          <span style="color:var(--text-soft);">（<code>_$</code> 前缀是 LayaAir 场景 / 预制体文件的字段约定，下文 <code>_$type</code> / <code>_$comp</code> 等同理。）</span>
+        </div>
+      </li>
+      <li>
+        <div class="st-title">组件分发 · <code>ResoureMap.writeComponentData()</code></div>
+        <div class="st-body">
+          整个插件的「总开关」：遍历每个组件，按类型分发给对应导出器（相机 / 网格 / 蒙皮网格 / 灯光 / 动画 / 粒子 / 精灵 / 自定义脚本…）。
+          详见下方 <a href="#s2" style="color:var(--accent);font-weight:600;">② 组件分发链</a>。
+        </div>
+      </li>
+      <li>
+        <div class="st-title">落盘 · <code>saveAllFile()</code> → <code>ResoureMap.SaveAllFile()</code></div>
+        <div class="st-body">
+          <b>场景模式</b>构建 <code>Scene2D → Scene3D</code> 根（写入天空盒 / 环境光 / 球谐 / 雾），输出 <code>.ls</code>；
+          <b>预设模式</b>把每个根节点输出为 <code>.lh</code>（开启「批量导出一级节点」时按一级子节点拆分）。
+          最后迭代保存所有登记文件——保存中可能动态产生新文件（如动画又引用了材质），用「已处理集合 + 循环」确保不漏。
+          完成后弹出<b>不支持功能汇总</b>对话框。
+        </div>
+      </li>
+    </ol>
+
+    <div class="shot-pair">
+      <figure class="shot">
+        <img src="../img/overview-window-collapsed.png" alt="导出窗口折叠总览">
+        <figcaption><b>折叠态总览：</b>顶部切换导出为场景 / 预设，下含五个折叠设置区与保存路径、导出按钮。</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="../img/overview-window-expanded.png" alt="导出窗口展开全部设置">
+        <figcaption><b>展开全部设置：</b>节点 / 模型 / 其他（含粒子默认模式）/ 自定义 Shader / 组件脚本导出配置。</figcaption>
+      </figure>
+    </div>
+
+    <figure class="shot">
+      <img src="../img/overview-preset-progress.png" alt="导出为预设模式与导出进度">
+      <figcaption><b>导出过程：</b>「导出为预设」模式下多出「批量导出一级节点」选项；导出时 Unity 会对涉及的纹理触发重导入并显示进度。</figcaption>
+    </figure>
+
+    <figure class="shot">
+      <img src="../img/overview-output-dir.png" alt="选择导出保存路径">
+      <figcaption><b>选择保存路径：</b>点「浏览」从文件系统选择导出目录。图中目标是一个已有的 LayaAir 工程的 <code>assets</code> 目录——其中的 <code>atlas</code>、<code>resources</code> 等文件夹是 LayaAir 引擎工程自带的结构，<b>并非本次导出生成</b>。</figcaption>
+    </figure>
+  </section>
+
+  <!-- ② 组件分发链 -->
+  <section class="group" id="s2">
+    <div class="group-head">
+      <div class="gh-left"><h2>② 组件分发链</h2><span class="gh-desc">组件 → 产物对照（含节点类型判定）</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>本节展开 ① 中的组件分发阶段：插件逐个检查节点上的组件，按类型交给对应导出器，各自产出对应文件。</b>下表枚举每种 Unity 组件、其对应的 LayaAir 产物，以及对应的细化页——这也是后续各页（网格 / 材质 / 动画…）所深入说明的分发链。
+    </p>
+    <table>
+      <thead><tr><th>Unity 组件</th><th>LayaAir 产物</th><th>说明 / 详情</th></tr></thead>
+      <tbody>
+        <tr><td class="feat">Camera <sup>*</sup></td><td class="target">Camera 节点（<code>_$type</code>）</td><td class="note">投影、FOV、裁剪面、清屏色；相机有额外 Y180 朝向补偿（见 ③）</td></tr>
+        <tr><td class="feat">MeshFilter + MeshRenderer</td><td class="target"><code>.lm</code> 网格 + <code>.lmat</code> 材质</td><td class="note"><a href="mesh.html" style="color:var(--accent)">网格导出</a> · <a href="material-shader.html" style="color:var(--accent)">材质 / Shader</a></td></tr>
+        <tr><td class="feat">SkinnedMeshRenderer</td><td class="target">网格 + 骨骼引用 + 包围盒</td><td class="note">骨骼按节点引用，<code>localBounds</code> 中心 X 取反 · <a href="mesh.html" style="color:var(--accent)">网格导出</a></td></tr>
+        <tr><td class="feat">Light</td><td class="target">方向光 / 点光 / 聚光</td><td class="note">按类型分流，写颜色 / 强度 / 范围等；与相机同样有额外 Y180 朝向补偿（见 ③）</td></tr>
+        <tr><td class="feat">Animator</td><td class="target"><code>.lani</code> + 状态机</td><td class="note">曲线绑定按类型分发；纯 SpriteRenderer 颜色动画转 2D · <a href="animation.html" style="color:var(--accent)">动画导出</a></td></tr>
+        <tr><td class="feat">ReflectionProbe / LODGroup</td><td class="target">反射探针 / LOD</td><td class="note">包围盒经矩阵变换；LOD 各级按节点引用</td></tr>
+        <tr><td class="feat">ParticleSystem</td><td class="target">GPU(Shuriken) 或 CPU 粒子</td><td class="note">按模式分两条路；启用 Trails/Noise 等会自动转 CPU · <a href="particle.html" style="color:var(--accent)">粒子导出</a></td></tr>
+        <tr><td class="feat">ParticleSystemForceField</td><td class="target">力场</td><td class="note">仅在 CPU 粒子模式下有意义 · <a href="particle.html" style="color:var(--accent)">粒子导出</a></td></tr>
+        <tr><td class="feat">SpriteRenderer</td><td class="target">UI3D + 2D 预制体 + 图集</td><td class="note">整图直引 / 子区域出 <code>.atlas</code>；颜色动画出 <code>.mcc</code> · <a href="sprite-2d.html" style="color:var(--accent)">2D 精灵导出</a></td></tr>
+        <tr><td class="feat">自定义 MonoBehaviour</td><td class="target">脚本组件 + 序列化属性</td><td class="note"><b>仅在配置了 UUID 映射时导出</b>，否则不导出；只搬属性值，不转逻辑代码</td></tr>
+      </tbody>
+    </table>
+    <div class="note">
+      <b><sup>*</sup> Camera 例外：</b>相机不走 <code>writeComponentData</code> 的组件分发链，而是在<b>上一层</b>
+      <code>getComponentsData</code> 里就被单独识别——挂了 Camera 的对象直接把节点 <code>_$type</code> 标成
+      <code>Camera</code>（其余对象标为 <code>Sprite3D</code>），相机参数随节点本体写出，而非作为 <code>_$comp</code> 里的一个组件项。
+      表中其余各行才是真正经 <code>writeComponentData</code> 按组件类型分流的。
+    </div>
+    <div class="note">
+      <b>分发即总开关：</b>没有匹配分支的组件会被直接忽略。这也意味着——任何<b>靠脚本逻辑驱动</b>的东西
+      （角色控制器、相机 Rig、Cinemachine 等）都不在导出范围内，需要在 LayaAir 端用 TS 重写。
+    </div>
+  </section>
+
+  <!-- ③ 坐标系转换 -->
+  <section class="group" id="s3">
+    <div class="group-head">
+      <div class="gh-left"><h2>③ 坐标系转换</h2><span class="gh-desc">Unity 左手系 → LayaAir 右手系</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>本节说明贯穿全程的坐标系转换：Unity 为左手系、LayaAir 为右手系，分发链的每条导出路径在写出空间数据前都需先对齐坐标。</b>两个引擎手性相反，插件统一以<b>沿 X 轴翻转</b>处理，相应逻辑分布于各导出路径中，汇总如下：
+    </p>
+    <table>
+      <thead><tr><th>对象</th><th>处理方式</th></tr></thead>
+      <tbody>
+        <tr><td class="feat">网格顶点</td><td class="note">顶点位置 X 分量取反（导出时逐顶点翻转，详见<a href="mesh.html" style="color:var(--accent)">网格导出</a>）</td></tr>
+        <tr><td class="feat">SpriteRenderer 节点</td><td class="note">没有导出网格可翻转，改为在节点 <code>transform.localScale.x</code> 取反补偿</td></tr>
+        <tr><td class="feat">SkinnedMeshRenderer 包围盒</td><td class="note"><code>localBounds</code> 中心 X 取反后重算 min / max</td></tr>
+        <tr><td class="feat">相机 / 灯光</td><td class="note">本体施加额外 Y180 旋转；其子节点改用「取反 Z」而非取反 X，并左乘 Y180 补偿父级</td></tr>
+        <tr><td class="feat">反射探针包围盒</td><td class="note">顶点经 <code>worldToLocalMatrix</code> 变换到局部空间</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ④ 产物文件类型 -->
+  <section class="group" id="s4">
+    <div class="group-head">
+      <div class="gh-left"><h2>④ 产物文件类型</h2></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>本节列出整条链路落盘产出的文件类型：分发链处理完各类组件后，所有数据写入下列文件。</b>每种产物对应一类资源——场景、节点、网格、材质、动画、贴图等，构成最终交付 LayaAir 工程的导出结果。
+    </p>
+    <table>
+      <thead><tr><th>扩展名 / 目录</th><th>内容</th></tr></thead>
+      <tbody>
+        <tr><td class="feat"><code>.ls</code></td><td class="note">场景文件（<code>Scene2D → Scene3D</code> 根，含天空盒 / 环境光 / 球谐 / 雾）</td></tr>
+        <tr><td class="feat"><code>.lh</code></td><td class="note">节点 / 预制体（导出为预设模式；可按一级节点批量拆分）</td></tr>
+        <tr><td class="feat"><code>.lm</code></td><td class="note">网格（顶点流 / 子网格范围 / 骨骼绑定）</td></tr>
+        <tr><td class="feat"><code>.lmat</code></td><td class="note">材质（贴图 / 颜色 / 浮点参数 / 渲染状态）</td></tr>
+        <tr><td class="feat"><code>.lani</code></td><td class="note">动画片段（骨骼 / 属性曲线）</td></tr>
+        <tr><td class="feat"><code>.atlas</code> + 贴图</td><td class="note">2D 图集（SpriteRenderer 子区域）</td></tr>
+        <tr><td class="feat"><code>.mcc</code></td><td class="note">2D 动画控制器（SpriteRenderer 颜色动画）</td></tr>
+        <tr><td class="feat">贴图 <code>.png</code>/<code>.jpg</code>/<code>.hdr</code></td><td class="note">纹理（按是否含 Alpha / HDR 决定格式）</td></tr>
+        <tr><td class="feat"><code>_src_/</code> 运行时脚本</td><td class="note">内置注入的 TS（目前仅 <code>Animator2DSync.ts</code>）</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ⑤ 实测验证 -->
+  <section class="group" id="s5">
+    <div class="group-head">
+      <div class="gh-left"><h2>⑤ 实测验证 · Unity → LayaAir</h2><span class="gh-desc">3D Game Kit Lite 场景导出</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>本节以真实场景验证前四节的整条链路导出结果。</b>以 3D Game Kit Lite 的示例场景实测：导出后将产物导入 LayaAir 3.x，<b>场景层级、角色网格、材质贴图、灯光、骨骼</b>等核心美术资源
+      均忠实还原并正常渲染——这部分正是分发链里有明确分支的组件。
+    </p>
+
+    <figure class="shot">
+      <img src="../img/overview-unity-vs-laya.png" alt="Unity 与 LayaAir 并排对比">
+      <figcaption><b>Unity（左）↔ LayaAir（右）：</b>导出产物在 LayaAir 3.x 中打开，场景层级、角色、地块均还原渲染。</figcaption>
+    </figure>
+
+    <figure class="shot sm">
+      <img src="../img/overview-unsupported-dialog.png" alt="导出完成的不支持组件兼容性提示">
+      <figcaption><b>兼容性提示：</b>导出完成时插件弹出汇总对话框（<code>UnsupportedFeatureCollector</code>），列出场景中不支持、不会被导出的组件——碰撞器、AudioSource、CharacterController、TrailRenderer 等，详细 GameObject 列表同步输出到 Console。</figcaption>
+    </figure>
+
+    <div class="note">
+      <b>导出范围边界</b>（导出完成对话框 / Console 同步列出）：
+      <br>· <b>脚本逻辑</b>：MonoBehaviour 只导出序列化属性值，不转换逻辑代码；靠脚本驱动的相机 Rig、角色控制器等不在导出范围内。
+      <br>· <b>Animator 混合树（BlendTree）</b>：当前版本不导出，对应状态导出为空状态。
+      <br>· <b>自定义 Shader</b>：以启发式方式将 HLSL 转换为 GLSL，仅覆盖常见结构（见 <a href="custom-shader.html" style="color:var(--accent)">自定义 Shader</a>）。
+      <br>· <b>粒子</b>：导出为 LayaAir 粒子格式，渲染依赖目标工程具备对应的粒子运行时（见 <a href="particle.html" style="color:var(--accent)">粒子导出</a>）。
+      <br>· <b>纹理可读性</b>：导出时插件会临时开启纹理的 Read/Write 再读取，无需手动预先开启；但位于<b>只读 / 不可变包</b>（如部分内置示例包）内、无法修改导入设置的纹理不在导出范围内。
+    </div>
+    <div class="note">
+      <b>概括：本插件迁移的是美术资产，运行逻辑不在迁移范围内。</b>导出器解决几何 / 材质 / 动画数据的迁移；
+      交互与玩法逻辑始终需要在 LayaAir 工程内用引擎 API 重新实现。
+    </div>
+  </section>
+
+  <footer class="page">
+    <p>官方文档：<a href="https://layaair.com/3.x/doc/3D/advanced/Unity/readme.html">layaair.com/3.x/doc/3D/advanced/Unity</a> · 本页基于插件 1.1.7 源码与实测整理。</p>
+  </footer>
+
 </div>
+
+<script src="../lightbox.js"></script>
 </body>
 </html>

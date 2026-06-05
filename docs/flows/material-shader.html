@@ -3,24 +3,222 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>材质与内置 Shader 映射流程 · → .lmat</title>
+<title>材质 / Shader 导出 · 查表映射与 HDR 分解</title>
 <link rel="stylesheet" href="../style.css">
+<style>
+  /* material 页专属图解 */
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 22px; font-size: 13px; }
+  .flow .fb { background: #fff; border: 1px solid var(--border); border-radius: 7px; padding: 7px 11px; color: var(--text); }
+  .flow .fb.hl { background: #eef2ff; border-color: #cfe0ff; color: var(--accent); font-weight: 600; }
+  .flow .fa { color: var(--text-faint); }
+</style>
 </head>
 <body>
 <div class="wrap">
+
   <a class="back-link" href="../index.html"><span>←</span> 返回能力一览</a>
-  <div class="placeholder">
-    <div class="ph-icon">🎨</div>
-    <span class="ph-tag">待补充</span>
-    <h1>材质与内置 Shader 映射流程 · → .lmat</h1>
-    <p>本页将梳理：基于 MetarialPropData.json 的按名查表机制、贴图槽 / 颜色（含 HDR 分解）/ 浮点（gamma、条件规则）映射、渲染状态推算，以及天空盒 .cubemap 生成流程。</p>
-    <div class="skeleton">
-      <div class="sk-bar w85"></div>
-      <div class="sk-bar"></div>
-      <div class="sk-bar w70"></div>
-      <div class="sk-bar w50"></div>
+
+  <header class="page">
+    <p class="eyebrow">核心原理 · 材质 / Shader 导出</p>
+    <h1>材质 / Shader 导出</h1>
+    <div class="meta-row">
+      <span><b>入口</b> <code>MaterialFile</code> → <code>MetarialUitls.WriteMetarial</code></span>
+      <span><b>格式</b> <code>LAYAMATERIAL:04</code>（<code>.lmat</code>）</span>
+      <span><b>查表配置</b> <code>MetarialPropData.json</code></span>
     </div>
+  </header>
+
+  <div class="note" style="background:#f4f7ff;border-color:#cfe0ff;">
+    <b>本章思路：</b>材质导出的核心是按 shader 名查表映射：① 先以 shader 名查到对应的映射配置，据此逐类映射 → ② 渲染状态、③ 贴图、④ 颜色（HDR 需分解）、⑤ float（含条件规则）、⑥ defines 宏 → ⑦ 天空盒为特例，单独导出 <code>.cubemap</code>。
   </div>
+
+  <div class="note">
+    <b>本页实测材质：</b><code>Ellen_Body_Mat</code>（Standard shader）来自 Unity 官方免费示例
+    <a href="https://assetstore.unity.com/packages/templates/tutorials/3d-game-kit-lite-135162"><b>3D Game Kit Lite</b></a>；天空盒为 6 面天空盒 <code>6SidedFluffball</code>。
+  </div>
+
+  <nav class="toc">
+    <b class="toc-label">本页梳理</b>
+    <a href="#s1">① 按名查表</a>
+    <a href="#s2">② 渲染状态</a>
+    <a href="#s3">③ 贴图映射</a>
+    <a href="#s4">④ 颜色 + HDR</a>
+    <a href="#s5">⑤ float + 条件规则</a>
+    <a href="#s6">⑥ defines</a>
+    <a href="#s7">⑦ 天空盒</a>
+  </nav>
+
+  <!-- ① 查表 -->
+  <section class="group" id="s1">
+    <div class="group-head">
+      <div class="gh-left"><h2>① 按 shader 名查表</h2><span class="gh-desc">MetarialPropData.json</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>本节是总纲——先按 shader 名查到映射配置，决定后续映射方式。</b>
+      <code>WriteMetarial</code> 用 <code>material.shader.name</code> 查 <code>MaterialPropsConfigs</code>：
+      查到就按配置导出；<b>查不到</b>时：未启用自定义 Shader 导出则跳过该材质，启用则转交
+      <a href="custom-shader.html" style="color:var(--accent)">自定义 Shader 导出</a>。
+    </p>
+    <p style="padding:8px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      实测 <code>Ellen_Body_Mat</code> 是 <b>Standard</b>，配置把它映射为 Laya 的 <b>PBR</b> 材质类型：
+    </p>
+
+    <div class="shot-pair">
+      <figure class="shot">
+        <img src="../img/material-inspector.png" alt="Unity 材质检查器">
+        <figcaption><b>导出前 · Unity：</b>Standard shader，反射率 / 金属 / 法线 / 发射（HDR 青色）等贴图槽与参数。</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="../img/material-lmat.png" alt="导出后 LayaAir 材质">
+        <figcaption><b>导出后 · LayaAir：</b>type 变 <code>PBR</code>，反照率 / 法线 / 自发光 / 遮挡 / 金属光泽贴图，金属度 / 光滑度 / Alpha 测试阈值齐全。</figcaption>
+      </figure>
+    </div>
+
+    <div class="note">
+      <code>Standard</code> 配置含 8 个贴图槽（<code>_MainTex→u_AlbedoTexture</code>、<code>_BumpMap→u_NormalTexture</code>、
+      <code>_MetallicGlossMap</code>、<code>_EmissionMap</code>、<code>_OcclusionMap</code>…）+ 颜色 + float + 条件规则。
+      已配置的 shader 类型：<code>Standard/PBR</code>、<code>BlinnPhong</code>、<code>Unlit</code>、<code>Skybox</code> 系、<code>PARTICLESHURIKEN</code>。
+    </div>
+  </section>
+
+  <!-- ② 渲染状态 -->
+  <section class="group" id="s2">
+    <div class="group-head">
+      <div class="gh-left"><h2>② 渲染状态</h2></div>
+    </div>
+    <p style="padding:16px 22px 18px;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>映射剔除 / 混合 / 深度等渲染状态到 Laya 字段。</b>
+      写入 <code>s_Cull</code>（剔除）、<code>s_Blend</code> / <code>s_BlendSrc</code> / <code>s_BlendDst</code>（混合因子）、
+      <code>alphaTest</code> + <code>alphaTestValue</code>、<code>renderQueue</code>、<code>materialRenderMode</code>。
+      普通材质（本页主题的 Standard/PBR 等）的混合因子经 <code>GetSrcBlend</code> / <code>GetDstBlend</code> 把 Unity 的
+      <code>_SrcBlend</code> / <code>_DstBlend</code> 整数值用 <b>switch</b> 逐项映射到 Laya 的混合枚举。
+      （自定义 Shader 与粒子材质走另一条按枚举名映射的路径，不在此处。）
+    </p>
+  </section>
+
+  <!-- ③ 贴图 -->
+  <section class="group" id="s3">
+    <div class="group-head">
+      <div class="gh-left"><h2>③ 贴图映射</h2></div>
+    </div>
+    <p style="padding:16px 22px 18px;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>将配置中的各贴图槽映射到 Laya 字段并导出。</b>
+      遍历配置的贴图槽，<code>material.GetTexture(uName)</code> → 导出 <code>TextureFile</code> → 加入 <code>textures</code> 数组（带 layaName）。
+      <b>内置资源贴图跳过</b>（<code>unity_builtin_extra</code> 等）；法线贴图标 <code>isNormal</code>。平铺偏移走 <code>tillOffset</code> 写 Vector4。
+    </p>
+  </section>
+
+  <!-- ④ HDR 分解 -->
+  <section class="group" id="s4">
+    <div class="group-head">
+      <div class="gh-left"><h2>④ 颜色 + HDR 分解</h2><span class="gh-desc">本页重点</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>普通颜色直接写入；HDR 超亮颜色分解为颜色 + 强度两部分。</b>
+      普通颜色直接写 rgba；<b>HDR 颜色</b>（如自发光）分量 &gt; 1，超出 0–1 范围，于是
+      <code>DecomposeHdrColor</code> 把它拆成<b>压缩颜色 + 强度</b>两部分：颜色分量先按最大分量缩放、再夹到上限
+      <b>0.749</b>（<code>k_MaxByteForOverexposedColor</code>），并经 <code>LinearToGammaSpace</code> 转到 <b>Gamma 空间</b>后写 rgba；
+      强度是<b>按最大分量反算</b>得出（<code>1 / scaleFactor</code>，<b>不等于</b> Unity 强度滑杆的原值），单独写到 <code>hdrName</code>（如 <code>u_EmissionIntensity</code>）。
+    </p>
+
+    <div class="flow">
+      <span class="fb">Unity HDR 颜色<br>RGB(0,143,191) 强度 2</span>
+      <span class="fa">— DecomposeHdrColor →</span>
+      <span class="fb hl">压缩颜色（≤0.749，Gamma 空间）<br>+ 反算强度</span>
+      <span class="fa">=</span>
+      <span class="fb">Laya 自发光<br>颜色 + 强度 分离</span>
+    </div>
+
+    <div class="shot-pair">
+      <figure class="shot">
+        <img src="../img/material-emission-hdr.png" alt="Unity HDR 自发光颜色选择器">
+        <figcaption><b>导出前 · Unity：</b>「发射」(Emission) 的 HDR 颜色选择器——颜色 RGB(0,143,191)，<b>强度滑杆</b> = 2，颜色超亮。</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="../img/material-lmat.png" alt="导出后 LayaAir 自发光颜色与强度">
+        <figcaption><b>导出后 · LayaAir：</b>拆成<b>「自发光颜色」（青）+「自发光强度」</b>两个独立字段——HDR 分解完成。</figcaption>
+      </figure>
+    </div>
+
+    <div class="note">
+      BlinnPhong 材质若缺高光色，会补默认 <code>u_MaterialSpecular = (0.2,0.2,0.2,1)</code>。
+    </div>
+  </section>
+
+  <!-- ⑤ float + rule -->
+  <section class="group" id="s5">
+    <div class="group-head">
+      <div class="gh-left"><h2>⑤ float + 条件规则</h2></div>
+    </div>
+    <p style="padding:16px 22px 18px;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>逐个映射 float，部分带条件规则按情况切换取值来源。</b>
+      <code>material.GetFloat(uName)</code> → 写 layaName。支持 <b>rule 条件改名</b>：如材质有 <code>_MetallicGlossMap</code> 贴图时，
+      光滑度改为从 <code>_GlossMapScale</code> 读取（Laya 端字段仍是 <code>u_Smoothness</code>，变的只是去 Unity 材质取值的属性名）。<code>isGamma</code> 标记的值经 <code>LinearToGammaSpace</code> 转换。
+    </p>
+  </section>
+
+  <!-- ⑥ defines -->
+  <section class="group" id="s6">
+    <div class="group-head">
+      <div class="gh-left"><h2>⑥ defines（宏开关）</h2></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>按材质实际特性追加宏开关。</b>
+      下面三类来源各自对应一种触发条件：
+    </p>
+    <table>
+      <thead><tr><th>来源</th><th>触发条件</th></tr></thead>
+      <tbody>
+        <tr><td class="feat">floatValue</td><td class="note">某 float 等于指定值 → 加宏</td></tr>
+        <tr><td class="feat">TextureValue</td><td class="note">某贴图存在 → 加宏（如有法线贴图 → <code>NORMALTEXTURE</code>）</td></tr>
+        <tr><td class="feat">keyWorld</td><td class="note">某 shader keyword 启用 → 加宏</td></tr>
+      </tbody>
+    </table>
+    <div class="note">含法线类宏（<code>NORMALTEXTURE</code> / <code>DETAILNORMAL</code> / <code>NORMALMAP</code>）时自动追加 <code>NEEDTBN</code>。</div>
+  </section>
+
+  <!-- ⑦ 天空盒 -->
+  <section class="group" id="s7">
+    <div class="group-head">
+      <div class="gh-left"><h2>⑦ 天空盒 → .cubemap</h2><span class="gh-desc">仅 6 Sided 出 cubemap</span></div>
+    </div>
+    <p style="padding:16px 22px 0;margin:0;color:var(--text-soft);font-size:14px;">
+      <b>天空盒作为特例单独导出，生成 <code>.cubemap</code> 而非仅 <code>.lmat</code>。</b>
+      场景天空盒材质若是 <code>Skybox/6 Sided</code>，走 <code>WriteSkyMetarial</code>：把 6 个面的贴图写入一个 <code>.cubemap</code> 文件，
+      材质 <code>.lmat</code> 的 type 为 <code>SkyBox</code>，引用该 cubemap。
+    </p>
+
+    <table>
+      <thead><tr><th>Unity 天空盒 Shader</th><th>支持</th><th>导出去向</th></tr></thead>
+      <tbody>
+        <tr><td class="feat"><code>Skybox/6 Sided</code></td><td><span class="badge full">✓</span></td><td class="note"><code>WriteSkyMetarial</code> → <code>.cubemap</code>（6 面）+ SkyBox 材质</td></tr>
+        <tr><td class="feat"><code>Skybox/Procedural</code></td><td><span class="badge full">✓</span></td><td class="note">普通查表 → <code>SkyProcedural</code>（SkyTint / GroundColor）</td></tr>
+        <tr><td class="feat"><code>Skybox/Panoramic</code></td><td><span class="badge full">✓</span></td><td class="note">普通查表</td></tr>
+        <tr><td class="feat"><code>Skybox/Cubemap</code></td><td><span class="badge no">✗</span></td><td class="note">当前版本未支持单张 Cubemap 天空盒导出 → 跳过，<b>不生成 cubemap</b></td></tr>
+      </tbody>
+    </table>
+
+    <figure class="shot sm">
+      <img src="../img/material-skybox-mat.png" alt="6 面天空盒材质">
+      <figcaption><b>导出前 · Unity：</b><code>Skybox/6 Sided</code> 材质，Front / Back / Left / Right / Up / Down 六个面贴图。</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="../img/material-skybox-laya.png" alt="LayaAir 中的天空盒">
+      <figcaption><b>导出后 · LayaAir：</b>6 面合成的 <code>.cubemap</code> 在场景中渲染出天空，右侧为 cubemap 属性。</figcaption>
+    </figure>
+
+    <div class="note">
+      <b>天空盒支持范围：</b>当前版本支持 <code>Skybox/6 Sided</code>（导成 <code>.cubemap</code>）、<code>Skybox/Procedural</code>、
+      <code>Skybox/Panoramic</code>；不支持单张 <code>Skybox/Cubemap</code> 天空盒。
+    </div>
+  </section>
+
+  <footer class="page">
+    <p>官方文档：<a href="https://layaair.com/3.x/doc/3D/advanced/Unity/readme.html">layaair.com/3.x/doc/3D/advanced/Unity</a> · 本页基于插件 1.1.7 源码与实测整理。</p>
+  </footer>
+
 </div>
+
+<script src="../lightbox.js"></script>
 </body>
 </html>
