@@ -254,9 +254,9 @@ namespace LayaAir3.Converter
                         string outPath = Path.Combine(outDir, baseName + ".laya.vfx");
                         string json = ConvertVfx(_srcFile, outPath, scanner);
                         sb.AppendLine("✓ [vfx] " + _srcFile + "\n     → " + outPath);
-                        var copied = new HashSet<string>(); var missing = new HashSet<string>(); var seen = new HashSet<string>();
-                        CopyDependencies(json, Path.Combine(outDir, "_deps"), scanner, copied, missing, seen);
-                        ReportDeps(sb, copied, missing, Path.Combine(outDir, "_deps"));
+                        var copied = new HashSet<string>(); var missing = new HashSet<string>(); var seen = new HashSet<string>(); var copiedLib = new HashSet<string>();
+                        CopyDependencies(json, Path.Combine(outDir, "_deps"), scanner, copied, missing, seen, copiedLib);
+                        ReportDeps(sb, copied, missing, copiedLib, Path.Combine(outDir, "_deps"));
                     }
                 }
             }
@@ -287,7 +287,7 @@ namespace LayaAir3.Converter
                 if (doVfx) files.AddRange(Directory.GetFiles(_sourceDir, "*.vfx", SearchOption.AllDirectories));
 
                 string depRoot = Path.Combine(_targetDir, "_deps");
-                var copied = new HashSet<string>(); var missing = new HashSet<string>(); var seen = new HashSet<string>();
+                var copied = new HashSet<string>(); var missing = new HashSet<string>(); var seen = new HashSet<string>(); var copiedLib = new HashSet<string>();
 
                 for (int i = 0; i < files.Count; i++)
                 {
@@ -308,7 +308,7 @@ namespace LayaAir3.Converter
                             string outPath = Path.Combine(_targetDir, ChangeExt(rel, ".laya.vfx"));
                             Directory.CreateDirectory(Path.GetDirectoryName(outPath));
                             string json = ConvertVfx(f, outPath, scanner);
-                            CopyDependencies(json, depRoot, scanner, copied, missing, seen);
+                            CopyDependencies(json, depRoot, scanner, copied, missing, seen, copiedLib);
                             okVfx++; sb.AppendLine("✓ [vfx] " + rel);
                         }
                     }
@@ -348,7 +348,7 @@ namespace LayaAir3.Converter
                             File.WriteAllText(outPath, csText);
                             okPv++; sb.AppendLine(L("✓ [变体] ", "✓ [variant] ") + prefabRel + " → " + outRel);
                             // 变体引用的资源（覆盖进来的新纹理/mesh）也拷依赖
-                            CopyDependencies(csText, depRoot, scanner, copied, missing, seen);
+                            CopyDependencies(csText, depRoot, scanner, copied, missing, seen, copiedLib);
                         }
                         catch (Exception e) { failPv++; sb.AppendLine(L("✗ [变体] ", "✗ [variant] ") + pf.Substring(_sourceDir.Length) + " : " + e.Message); }
                     }
@@ -356,7 +356,7 @@ namespace LayaAir3.Converter
                         "Prefab variants: generated " + okPv + ", skipped " + skipPv + " (no VisualEffect override / base not found), failed " + failPv));
                 }
 
-                if (doVfx) ReportDeps(sb, copied, missing, depRoot);
+                if (doVfx) ReportDeps(sb, copied, missing, copiedLib, depRoot);
             }
             finally { EditorUtility.ClearProgressBar(); }
 
@@ -367,10 +367,13 @@ namespace LayaAir3.Converter
             AssetDatabase.Refresh();
         }
 
-        private void ReportDeps(System.Text.StringBuilder sb, HashSet<string> copied, HashSet<string> missing, string depRoot)
+        private void ReportDeps(System.Text.StringBuilder sb, HashSet<string> copied, HashSet<string> missing, HashSet<string> copiedLib, string depRoot)
         {
             sb.AppendLine(L("\n── 依赖资源（mesh / 纹理 / shader）──", "\n── Dependencies (mesh / texture / shader) ──"));
             sb.AppendLine(L("已拷贝 " + copied.Count + " 个文件（含 .meta）→ " + depRoot, "Copied " + copied.Count + " files (incl. .meta) → " + depRoot));
+            if (copiedLib.Count > 0)
+                sb.AppendLine(L("已镜像 " + copiedLib.Count + " 个已编译产物 → 目标工程 library（免运行时 shader 404）",
+                    "Mirrored " + copiedLib.Count + " compiled artifacts → target project library (avoids runtime shader 404)"));
             sb.AppendLine(L("提示：把 _deps 目录下的内容合并进你的 Laya 工程 assets 目录，运行时才能按 uuid 找到 mesh/纹理。",
                 "Tip: merge the _deps folder into your Laya project's assets so meshes/textures resolve by uuid at runtime."));
             if (missing.Count > 0)
@@ -425,9 +428,14 @@ namespace LayaAir3.Converter
         /// depRoot 下（保留相对 LayaVFXSample/assets 的路径）。copied/missing 跨文件累计去重。
         /// </summary>
         private void CopyDependencies(string producedJson, string depRoot, VfxResourceScanner scanner,
-                                      HashSet<string> copiedFiles, HashSet<string> missingUuids, HashSet<string> seenUuids)
+                                      HashSet<string> copiedFiles, HashSet<string> missingUuids, HashSet<string> seenUuids,
+                                      HashSet<string> copiedLib)
         {
             if (string.IsNullOrEmpty(scanner.LayaAssetsRoot)) return;
+            // 源工程 library（编译产物缓存）与目标工程 library：把已编译产物一并带过去，
+            // 免得目标工程 IDE 尚未按需编译某个 .bps 蓝图时，运行时取 _lib_/<uuid>@0.shader 报 404。
+            string srcLib = Path.Combine(Directory.GetParent(scanner.LayaAssetsRoot).FullName, "library");
+            string dstLib = FindTargetLibraryDir(depRoot);
             var queue = new Queue<string>();
             foreach (var u in ExtractUuids(producedJson)) if (seenUuids.Add(u)) queue.Enqueue(u);
             while (queue.Count > 0)
@@ -443,11 +451,52 @@ namespace LayaAir3.Converter
                     Directory.CreateDirectory(Path.GetDirectoryName(dst));
                     File.Copy(src, dst, true);
                     if (File.Exists(src + ".meta")) File.Copy(src + ".meta", dst + ".meta", true);
+                    // 顺带镜像该 uuid 在源工程 library 里的已编译产物（<uuid>@0.shader/@1.shader/.json 等）。
+                    // 二者按同一 uuid 编译、字节一致；目标 IDE 若重新编译只会生成相同内容，不冲突。
+                    CopyLibraryArtifacts(u, srcLib, dstLib, copiedLib);
                 }
                 // 递归：文本型资源扫内容；所有资源都扫其 .meta（fbx/贴图的导入设置里也可能引用材质等）
                 try { if (TextResExt.Contains(Path.GetExtension(src))) foreach (var u2 in ExtractUuids(File.ReadAllText(src))) if (seenUuids.Add(u2)) queue.Enqueue(u2); } catch { }
                 try { if (File.Exists(src + ".meta")) foreach (var u2 in ExtractUuids(File.ReadAllText(src + ".meta"))) if (seenUuids.Add(u2)) queue.Enqueue(u2); } catch { }
             }
+        }
+
+        /// <summary>从 _deps 目录向上找目标 Laya 工程根（以根目录下的 *.laya 文件为标记），返回其 library 目录；找不到返回 null。</summary>
+        private static string FindTargetLibraryDir(string depRoot)
+        {
+            try
+            {
+                var dir = new DirectoryInfo(depRoot);
+                while (dir != null)
+                {
+                    if (dir.Exists && dir.GetFiles("*.laya").Length > 0)
+                        return Path.Combine(dir.FullName, "library");
+                    dir = dir.Parent;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>把某 uuid 在源工程 library 下的全部已编译产物（&lt;uuid&gt;* 文件）拷到目标工程 library 的同名前缀目录。</summary>
+        private static void CopyLibraryArtifacts(string uuid, string srcLib, string dstLib, HashSet<string> copiedLib)
+        {
+            if (string.IsNullOrEmpty(srcLib) || string.IsNullOrEmpty(dstLib) || uuid == null || uuid.Length < 2) return;
+            string pfx = uuid.Substring(0, 2);
+            string srcDir = Path.Combine(srcLib, pfx);
+            if (!Directory.Exists(srcDir)) return;
+            string dstDir = Path.Combine(dstLib, pfx);
+            try
+            {
+                foreach (var f in Directory.GetFiles(srcDir, uuid + "*"))
+                {
+                    string dstFile = Path.Combine(dstDir, Path.GetFileName(f));
+                    if (!copiedLib.Add(dstFile)) continue;
+                    Directory.CreateDirectory(dstDir);
+                    File.Copy(f, dstFile, true);
+                }
+            }
+            catch { }
         }
 
         private static string ChangeExt(string rel, string newExt)
