@@ -17,6 +17,7 @@ namespace LayaAir3.Converter
             var shaderPropertyDefaults = Jval.Obj();
             var shaderPropertyExpressions = Jval.Obj();
             var shaderBindingLinks = Jval.Obj();
+            string perParticleColorProp = null;  // mesh输出的SG float属性连spawnIndex→走color.b自由通道(见下)
             var ctxInputSlots = UnityYamlParser.GetRefArrayField(ctx.Body, "m_InputSlots");
 
             Action<string> walkSlotTree = null;
@@ -58,6 +59,14 @@ namespace LayaAir3.Converter
                                     if (exRoot != null && rootNode != null && !isResUniform)
                                         shaderPropertyExpressions.Set(propName, Jval.Obj().Set("rootNodeId", exRoot).Set("outputType", rootNode.Get("outputType")).Set("nodes", exGraph));
                                 }
+                            }
+                            else if (owner != null && layaCtxType == "outputShaderGraphMesh" && UnityYamlParser.GetStringField(owner.Body, "attribute") == "spawnIndex")
+                            {
+                                // ⭐ mesh输出的SG float属性连到 getAttribute(spawnIndex)(如蜡烛 _Color_Index 逐蜡烛不同蜡池色):
+                                //   uniform 逐draw无法逐粒子 → 标记走 color.b 自由通道。后处理 InjectPerParticleColorIndex
+                                //   给该系统 init 注入 setAttribute(color,channels=4[B],SpawnIndex);.bps 侧把该属性 uniform 用法
+                                //   换成 vertexColor.b(ConverterWindow PatchPerParticleColorShaders)。只一个自由通道→只承载一个此类属性。
+                                perParticleColorProp = propName;
                             }
                             else if (owner != null)
                             {
@@ -179,6 +188,7 @@ namespace LayaAir3.Converter
             };
             foreach (var sID in ctxInputSlots) walkSlotTree(sID);
 
+            if (perParticleColorProp != null) props.Set("_perParticleColorIndexProp", perParticleColorProp);
             if (bindings.Count > 0) props.Set("shaderPropertyBindings", bindings);
             if (shaderPropertyDefaults.Count > 0)
             {
@@ -727,6 +737,19 @@ namespace LayaAir3.Converter
                 if (propName != null) SHAPE_PROP.TryGetValue(propName.ToLowerInvariant(), out layaPropName);
                 if (layaPropName == null) continue;
                 var v = UnityYamlParser.GetSlotInlineValue(slotEntry);
+                // ⭐ 形状复合值(line/circle/sphere...)可能连线到算子输出(如 "Line Position" inline operator)：
+                //    输入槽的 m_Value 是过期默认(如旧 Y=0 线)，真值在被连输出槽的 m_MasterData.m_Value。
+                //    跟随 m_LinkedSlots 读输出槽真值(对应 [[feedback_inline_curve_output_first]]：output 优先于 input 默认)。
+                var _shapeLinks = UnityYamlParser.GetLinkedSlots(slotEntry);
+                if (_shapeLinks.Count > 0)
+                {
+                    var _outSlot = GetCur(_shapeLinks[0]);
+                    if (_outSlot != null)
+                    {
+                        var _lv = UnityYamlParser.GetSlotInlineValue(_outSlot);
+                        if (_lv != null && _lv.IsObject) v = _lv;
+                    }
+                }
                 if (v != null && v.IsObject)
                 {
                     UnityYamlParser.ConvertUnityToLayaHandedness(v);

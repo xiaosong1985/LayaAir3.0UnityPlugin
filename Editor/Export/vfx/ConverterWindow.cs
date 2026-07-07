@@ -280,7 +280,8 @@ namespace LayaAir3.Converter
 
                 VfxResourceScanner scanner = null;
                 bool doVfx = _batchVfx;
-                if (doVfx) { scanner = BuildScanner(sb); if (scanner == null) doVfx = false; }
+                // 蓝图转换也需要 scanner：用 BlueprintShaderByName 给项目内 .bps 写与 shaderRes 一致的 .bps.meta uuid。
+                if (doVfx || _batchBlueprint) { scanner = BuildScanner(sb); if (scanner == null && doVfx) doVfx = false; }
 
                 var files = new List<string>();
                 if (_batchBlueprint) files.AddRange(Directory.GetFiles(_sourceDir, "*.shadergraph", SearchOption.AllDirectories));
@@ -288,6 +289,7 @@ namespace LayaAir3.Converter
 
                 string depRoot = Path.Combine(_targetDir, "_deps");
                 var copied = new HashSet<string>(); var missing = new HashSet<string>(); var seen = new HashSet<string>(); var copiedLib = new HashSet<string>();
+                var inProjectShaderUuids = new HashSet<string>();   // 项目内已转换生成的蓝图 shader uuid（_deps 跳过它们）
 
                 for (int i = 0; i < files.Count; i++)
                 {
@@ -300,7 +302,7 @@ namespace LayaAir3.Converter
                         {
                             string outPath = Path.Combine(_targetDir, ChangeExt(rel, ".bps"));
                             Directory.CreateDirectory(Path.GetDirectoryName(outPath));
-                            ConvertBlueprint(f, outPath);
+                            ConvertBlueprint(f, outPath, scanner, inProjectShaderUuids);
                             okBp++; sb.AppendLine("✓ [bp]  " + rel);
                         }
                         else
@@ -308,7 +310,7 @@ namespace LayaAir3.Converter
                             string outPath = Path.Combine(_targetDir, ChangeExt(rel, ".laya.vfx"));
                             Directory.CreateDirectory(Path.GetDirectoryName(outPath));
                             string json = ConvertVfx(f, outPath, scanner);
-                            CopyDependencies(json, depRoot, scanner, copied, missing, seen, copiedLib);
+                            CopyDependencies(json, depRoot, scanner, copied, missing, seen, copiedLib, inProjectShaderUuids);
                             okVfx++; sb.AppendLine("✓ [vfx] " + rel);
                         }
                     }
@@ -348,7 +350,7 @@ namespace LayaAir3.Converter
                             File.WriteAllText(outPath, csText);
                             okPv++; sb.AppendLine(L("✓ [变体] ", "✓ [variant] ") + prefabRel + " → " + outRel);
                             // 变体引用的资源（覆盖进来的新纹理/mesh）也拷依赖
-                            CopyDependencies(csText, depRoot, scanner, copied, missing, seen, copiedLib);
+                            CopyDependencies(csText, depRoot, scanner, copied, missing, seen, copiedLib, inProjectShaderUuids);
                         }
                         catch (Exception e) { failPv++; sb.AppendLine(L("✗ [变体] ", "✗ [variant] ") + pf.Substring(_sourceDir.Length) + " : " + e.Message); }
                     }
@@ -386,7 +388,7 @@ namespace LayaAir3.Converter
             }
         }
 
-        private void ConvertBlueprint(string inPath, string outPath)
+        private void ConvertBlueprint(string inPath, string outPath, VfxResourceScanner scanner = null, HashSet<string> inProjectShaderUuids = null)
         {
             string text = File.ReadAllText(inPath);
             var objects = SgIndex.ParseShadergraph(text);
@@ -396,6 +398,21 @@ namespace LayaAir3.Converter
             if (opts.SgInstanceMode) opts.SgIncludeRelPath = Path.GetFileNameWithoutExtension(outPath) + "_sgprop.glsl";
             var conv = new ShaderGraphConverter(idx, opts);
             File.WriteAllText(outPath, conv.Convert().Serialize(2));
+
+            // 写 .bps.meta：uuid 用 VFX 转换里 shaderRes 引用的同一个（按 shader 名从 BlueprintShaderByName 取）。
+            // 保证项目内 .bps 的 uuid == .laya.vfx 的 shaderRes → IDE 按同一 uuid 编译 → 运行期不再 404。
+            // 该 uuid 记入 inProjectShaderUuids，令 CopyDependencies 跳过 _deps 重复拷贝（避免同 uuid 两份资源冲突）。
+            if (scanner != null)
+            {
+                string shaderName = Path.GetFileNameWithoutExtension(outPath);
+                string bpsRes;
+                if (scanner.BlueprintShaderByName.TryGetValue(shaderName, out bpsRes) && bpsRes != null && bpsRes.StartsWith("res://"))
+                {
+                    string uuid = bpsRes.Substring("res://".Length);
+                    File.WriteAllText(outPath + ".meta", "{\n  \"uuid\": \"" + uuid + "\"\n}");
+                    if (inProjectShaderUuids != null) inProjectShaderUuids.Add(uuid);
+                }
+            }
         }
 
         // 返回转换产物 JSON 文本（供依赖收集用）。
@@ -407,7 +424,45 @@ namespace LayaAir3.Converter
             scanner.Apply(conv);
             string json = conv.Convert(yaml).Serialize(2);
             File.WriteAllText(outPath, json);
+            // 逐粒子蜡池色:把 .bps 里该 SG 属性的 uniform 用法换成 vertexColor.b
+            // (配合 VFX 侧 InjectPerParticleColorIndex 注入的 setAttribute(color, B, SpawnIndex))
+            PatchPerParticleColorBps(_targetDir, conv.PerParticleColorPatches);
             return json;
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex UuidRx =
+            new System.Text.RegularExpressions.Regex(@"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}");
+
+        /// <summary>
+        /// 逐粒子蜡池色 shader 侧固化:把 .bps 的 compileShader 里 SG 属性的 uniform 用法(如 vec3(_Color_Index))
+        /// 换成 vertexColor.b(color.b 自由通道;VFX 侧已注入 setAttribute(color, channels=4, SpawnIndex))。
+        /// 按 .bps.meta 的 uuid 严格匹配,只改命中的 .bps。
+        /// ⚠ 只改 compileShader 缓存文本;若 IDE 从节点图重编译会覆盖(节点图仍是 _Color_Index 属性节点),
+        ///   那种情况需要更深的节点改接(把属性节点重接到 VertexColor.b),此处未做。
+        /// </summary>
+        private void PatchPerParticleColorBps(string searchRoot,
+            System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string>> patches)
+        {
+            if (patches == null || patches.Count == 0 || string.IsNullOrEmpty(searchRoot) || !Directory.Exists(searchRoot)) return;
+            foreach (var bps in Directory.GetFiles(searchRoot, "*.bps", SearchOption.AllDirectories))
+            {
+                string metaPath = bps + ".meta";
+                if (!File.Exists(metaPath)) continue;
+                var mm = UuidRx.Match(File.ReadAllText(metaPath));
+                if (!mm.Success) continue;
+                string uuid = mm.Value.ToLowerInvariant();
+                string txt = null; bool dirty = false;
+                foreach (var kv in patches)
+                {
+                    if (!string.Equals(uuid, kv.Key, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (txt == null) txt = File.ReadAllText(bps);
+                    string needle = "vec3(" + kv.Value + ")";
+                    if (!txt.Contains(needle)) continue;
+                    txt = txt.Replace(needle, "vec3(vertexColor.b)");
+                    dirty = true;
+                }
+                if (dirty) File.WriteAllText(bps, txt);
+            }
         }
 
         private static readonly System.Text.RegularExpressions.Regex ResRefRx =
@@ -429,7 +484,7 @@ namespace LayaAir3.Converter
         /// </summary>
         private void CopyDependencies(string producedJson, string depRoot, VfxResourceScanner scanner,
                                       HashSet<string> copiedFiles, HashSet<string> missingUuids, HashSet<string> seenUuids,
-                                      HashSet<string> copiedLib)
+                                      HashSet<string> copiedLib, HashSet<string> inProjectShaderUuids = null)
         {
             if (string.IsNullOrEmpty(scanner.LayaAssetsRoot)) return;
             // 源工程 library（编译产物缓存）与目标工程 library：把已编译产物一并带过去，
@@ -441,6 +496,8 @@ namespace LayaAir3.Converter
             while (queue.Count > 0)
             {
                 string u = queue.Dequeue();
+                // 该 shader 已在项目内转换生成（.bps+.meta 用同一 uuid），不再从 LayaVFXSample 拷 _deps 重复，也不算缺失。
+                if (inProjectShaderUuids != null && inProjectShaderUuids.Contains(u)) continue;
                 string src;
                 if (!scanner.UuidToSourceFile.TryGetValue(u, out src) || !File.Exists(src)) { missingUuids.Add(u); continue; }
 

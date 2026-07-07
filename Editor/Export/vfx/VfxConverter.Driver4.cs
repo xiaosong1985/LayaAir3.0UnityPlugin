@@ -341,6 +341,27 @@ namespace LayaAir3.Converter
                 if (blocks == null) { blocks = Jval.Arr(); ctx.Set("blocks", blocks); }
                 bool already = false; foreach (var b in blocks.Items) if (b.Get("_meshSizeFix") != null) { already = true; break; }
                 if (already) continue;
+                // ⭐ 若输出已有 setAttribute size 块(如蜡烛 Overwrite 50.4),直接把它的值×factor:
+                //    注入的 Multiply 块会被插到最前,但会被后面的 Overwrite 覆盖掉(×factor 失效)。
+                //    对这种情况改成乘现有 size 值(幂等,标 _meshSizeFix)。CM_UNIT mesh 输出无 size 块→走下面注入。
+                Jval existingSize = null;
+                foreach (var b in blocks.Items)
+                {
+                    if (b.StrOf("typeId") != "setAttribute") continue;
+                    var bp = b.Get("props");
+                    if (bp != null && bp.StrOf("attribute") == "size") { existingSize = b; break; }
+                }
+                if (existingSize != null)
+                {
+                    var vals = existingSize.Get("props") != null ? existingSize.Get("props").Get("_values") : null;
+                    if (vals != null)
+                    {
+                        double x = vals.NumOf("x"); double v = vals.NumOf("value");
+                        vals.Set("x", x * factor.Value).Set("value", v * factor.Value);
+                        existingSize.Set("_meshSizeFix", factor.Value);
+                        continue;
+                    }
+                }
                 // id = 当前所有 block 最大 id + 500（每次注入重算，对应 JS L6064）
                 int maxId = 0;
                 foreach (var c in LayaContexts) { var bs = c.Get("blocks"); if (bs != null) foreach (var b in bs.Items) { int id = (int)b.NumOf("id"); if (id > maxId) maxId = id; } }
@@ -372,6 +393,66 @@ namespace LayaAir3.Converter
                     if (factor == null) continue;
                     p.Set("meshScale", factor.Value);
                 }
+            }
+        }
+
+        // per-particle 逐粒子蜡池色补丁表(shaderRes uuid → SG属性名);ConverterWindow 转完后 patch 对应 .bps。
+        public readonly List<KeyValuePair<string, string>> PerParticleColorPatches = new List<KeyValuePair<string, string>>();
+
+        /// <summary>
+        /// mesh 输出的 SG float 属性连到 getAttribute(spawnIndex)(BuildShaderBinding 标了 props._perParticleColorIndexProp,
+        /// 如蜡烛 _Color_Index 逐蜡烛不同蜡池色):给该系统 init 注入 setAttribute(color, channels=4[B], source=SpawnIndex)
+        /// 让每粒子 color.b=spawnIndex(codegen SpawnIndex→float(id)),并记录 (shaderRes,propName) 待 patch .bps
+        /// 把该属性 uniform 用法换成 vertexColor.b。只一个自由通道(color.b)→只承载一个此类属性。
+        /// </summary>
+        public void InjectPerParticleColorIndex()
+        {
+            // 反向 flow 映射:targetId → 源ctxId(找 mesh 输出所在系统的 init)
+            var byId = new Dictionary<int, Jval>();
+            var revFlow = new Dictionary<int, int>();
+            foreach (var c in LayaContexts)
+            {
+                int cid = (int)c.NumOf("id");
+                byId[cid] = c;
+                var fl = c.Get("flowLinks");
+                var outp = fl != null ? fl.Get("output") : null;
+                if (outp == null) continue;
+                if (outp.IsArray) { foreach (var lk in outp.Items) { int t = (int)lk.NumOf("targetId", -1); if (t >= 0) revFlow[t] = cid; } }
+                else { int t = (int)outp.NumOf("targetId", -1); if (t >= 0) revFlow[t] = cid; }
+            }
+            foreach (var ctx in LayaContexts)
+            {
+                if (ctx.StrOf("typeId") != "outputShaderGraphMesh") continue;
+                var props = ctx.Get("props"); if (props == null) continue;
+                string prop = props.StrOf("_perParticleColorIndexProp"); if (prop == null) continue;
+                props.Remove("_perParticleColorIndexProp");  // 临时标记,不写进最终 .laya.vfx
+
+                // 记录 .bps patch
+                string shaderRes = props.StrOf("shaderRes");
+                if (shaderRes != null) { var mm = UuidRe.Match(shaderRes); if (mm.Success) PerParticleColorPatches.Add(new KeyValuePair<string, string>(mm.Value, prop)); }
+
+                // 反向追到该系统的 init 上下文
+                int cur = (int)ctx.NumOf("id");
+                Jval initCtx = null; int guard = 0;
+                while (revFlow.ContainsKey(cur) && guard++ < 20)
+                {
+                    cur = revFlow[cur];
+                    Jval cc; if (byId.TryGetValue(cur, out cc) && cc.StrOf("typeId") == "initialize") { initCtx = cc; break; }
+                }
+                if (initCtx == null) continue;
+
+                var blocks = initCtx.Get("blocks");
+                if (blocks == null) { blocks = Jval.Arr(); initCtx.Set("blocks", blocks); }
+                bool has = false; foreach (var b in blocks.Items) if (b.Get("_ppColorIndex") != null) { has = true; break; }
+                if (has) continue;
+                int maxId = 0;
+                foreach (var c in LayaContexts) { var bs = c.Get("blocks"); if (bs != null) foreach (var b in bs.Items) { int id = (int)b.NumOf("id"); if (id > maxId) maxId = id; } }
+                var block = Jval.Obj()
+                    .Set("id", maxId + 600)
+                    .Set("typeId", "setAttribute").Set("enabled", true).Set("_ppColorIndex", prop)
+                    .Set("props", Jval.Obj().Set("attribute", "color").Set("source", "SpawnIndex")
+                        .Set("composition", "Overwrite").Set("random", "Off").Set("channels", 4));
+                blocks.Items.Add(block);
             }
         }
 
@@ -469,7 +550,12 @@ namespace LayaAir3.Converter
                     if (sb.StrOf("typeId") != "setSpawnEventAttribute") continue;
                     var sbp = sb.Get("props"); string attr = sbp != null ? sbp.StrOf("attribute") : null;
                     if (attr == null) continue;
-                    string targetSlotId = "block_" + (int)sb.NumOf("id") + "_value";
+                    int _sbId = (int)sb.NumOf("id");
+                    // ⚠ op→setSpawnEventAttribute 的 link slotId 实际是 block_<id>_<属性名>(如 block_29_position,
+                    //   见 L146 用 SlotPropName),不是 block_<id>_value。两者都匹配,否则 reroute 漏做→spawn位置退化成
+                    //   静态 valueX/Y/Z,时变的生成位置(如 StripSpawnRate 漩涡)丢失。
+                    string targetSlotId = "block_" + _sbId + "_value";
+                    string targetSlotIdAttr = "block_" + _sbId + "_" + attr;
                     var opsPointing = new List<Jval>();  // 收集指向此 spawn block 的 link Jval
                     foreach (var op in LayaOperators)
                     {
@@ -478,7 +564,7 @@ namespace LayaAir3.Converter
                         foreach (var slotName in outp.Keys)
                         {
                             var infoArr = outp.Get(slotName).Get("infoArr"); if (infoArr == null || !infoArr.IsArray) continue;
-                            foreach (var link in infoArr.Items) if ((int)link.NumOf("nodeId") == ctxId && link.StrOf("slotId") == targetSlotId) opsPointing.Add(link);
+                            foreach (var link in infoArr.Items) { if ((int)link.NumOf("nodeId") != ctxId) continue; var _sid = link.StrOf("slotId"); if (_sid == targetSlotId || _sid == targetSlotIdAttr) opsPointing.Add(link); }
                         }
                     }
                     if (opsPointing.Count == 0) continue;
@@ -1063,6 +1149,7 @@ namespace LayaAir3.Converter
             RerouteePositionBlocks();
             InjectMeshSizeFix();
             InjectSetPositionMeshScale();
+            InjectPerParticleColorIndex();
             FixMaterializeOverlay();
             FixTriggerEventMeshReceivers(); // 对应 JS L6145（最后一个 post-fix）
             return BuildOutput(yamlText);

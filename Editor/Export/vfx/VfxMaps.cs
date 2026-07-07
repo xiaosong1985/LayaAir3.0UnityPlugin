@@ -296,6 +296,8 @@ namespace LayaAir3.Converter
         {
             { "f042c66d-1de8-44b5-af1b-0058442f1316", 0.2 },
             { "e38d2d0d-ea52-4bc0-ae3f-09506c2cde20", 0.01 },
+            // ST_Candle mesh(FlipbookMode 蜡烛):.lm 是米级 1 单位,但输出 _Size=50.4(cm 语义)直乘=50单位太大;×0.01→0.504≈0.5单位,2个蜡烛才在 ±0.46 分开
+            { "e967aaae-7e5a-4d87-910f-8869618df7cc", 0.01 },
         };
     }
 }
