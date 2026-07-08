@@ -297,12 +297,37 @@ namespace LayaAir3.Converter
             if (modeInt == 4)
             {
                 var inputSlots = UnityYamlParser.GetRefArrayField(blockEntry.Body, "m_InputSlots");
-                var primarySlot = inputSlots.Count > 0 && inputSlots[0] != null ? Get(inputSlots[0]) : null;
+                string s0 = inputSlots.Count > 0 ? inputSlots[0] : null; // axes[0] 主轴 (Unity AxisZ)
+                string s1 = inputSlots.Count > 1 ? inputSlots[1] : null; // axes[1] 次轴 (Unity AxisY)
+
+                // 逐粒子轴来源识别：Advanced 的两轴各自可能连到「velocity 属性」或「径向法线 = position - center」。
+                // 旧启发式(primaryLinked→Along Velocity)把「被连的主轴」一律当成 velocity，
+                // 对 OrientAdvanced 模板(AxisZ=径向法线、AxisY=velocity)会算错朝向。这里保住 Advanced 并透传真实来源。
+                Jval centerA, centerB;
+                string srcA = ClassifyOrientAxisSource(s0, out centerA);
+                string srcB = ClassifyOrientAxisSource(s1, out centerB);
+                if (srcA != null || srcB != null)
+                {
+                    var slotA0 = s0 != null ? Get(s0) : null;
+                    var slotB0 = s1 != null ? Get(s1) : null;
+                    var a0 = Unwrap(slotA0 != null ? UnityYamlParser.GetSlotInlineValue(slotA0) : null);
+                    var b0 = Unwrap(slotB0 != null ? UnityYamlParser.GetSlotInlineValue(slotB0) : null);
+                    var o = Jval.Obj().Set("mode", "Advanced").Set("axes", axes)
+                        .Set("axisSourceA", srcA ?? "static")
+                        .Set("axisSourceB", srcB ?? "static");
+                    if (srcA == "position") o.Set("axisCenterA", centerA ?? Vec3O(0, 0, 0));
+                    if (srcB == "position") o.Set("axisCenterB", centerB ?? Vec3O(0, 0, 0));
+                    o.Set("customAxisA", (a0 != null && a0.IsObject) ? Vec3O(Nz1(a0, "x", 0), Nz1(a0, "y", 0), Nz1(a0, "z", 1)) : Vec3O(0, 0, 1));
+                    o.Set("customAxisB", (b0 != null && b0.IsObject) ? Vec3O(Nz1(b0, "x", 0), Nz1(b0, "y", 1), Nz1(b0, "z", 0)) : Vec3O(0, 1, 0));
+                    return o;
+                }
+
+                var primarySlot = s0 != null ? Get(s0) : null;
                 bool primaryLinked = primarySlot != null && UnityYamlParser.GetLinkedSlots(primarySlot).Count > 0;
                 if (primaryLinked)
                     return Jval.Obj().Set("mode", "Along Velocity").Set("axes", axes);
-                var slotA = inputSlots.Count > 0 && inputSlots[0] != null ? Get(inputSlots[0]) : null;
-                var slotB = inputSlots.Count > 1 && inputSlots[1] != null ? Get(inputSlots[1]) : null;
+                var slotA = s0 != null ? Get(s0) : null;
+                var slotB = s1 != null ? Get(s1) : null;
                 var valA = slotA != null ? UnityYamlParser.GetSlotInlineValue(slotA) : null;
                 var valB = slotB != null ? UnityYamlParser.GetSlotInlineValue(slotB) : null;
                 var a = Unwrap(valA);
@@ -327,6 +352,61 @@ namespace LayaAir3.Converter
         {
             if (v != null && v.IsObject && v.Get("direction") != null) return v.Get("direction");
             return v;
+        }
+
+        /// <summary>识别 orient 轴输入槽的逐粒子来源: "velocity" / "position"(径向法线) / null(静态或未知)。center 输出径向来源的中心(默认原点)。</summary>
+        private string ClassifyOrientAxisSource(string inputSlotID, out Jval center)
+        {
+            center = null;
+            var slot = inputSlotID != null ? Get(inputSlotID) : null;
+            if (slot == null) return null;
+            var linked = UnityYamlParser.GetLinkedSlots(slot);
+            if (linked.Count == 0) return null;   // 内联常量，非逐粒子
+            return ResolveOrientAxisOwner(linked[0], out center, 0);
+        }
+
+        /// <summary>沿 orient 轴连线追溯上游算子，判定其语义来源。支持 velocity / position 属性，以及 Subtract(position, center) 径向法线。</summary>
+        private string ResolveOrientAxisOwner(string srcSlotID, out Jval center, int depth)
+        {
+            center = null;
+            if (depth > 6 || srcSlotID == null) return null;
+            var srcSlot = Get(srcSlotID);
+            if (srcSlot == null) return null;
+            string masterID = UnityYamlParser.GetSlotMaster(srcSlot) ?? srcSlotID;
+            var master = Get(masterID) ?? srcSlot;
+            string ownerID = UnityYamlParser.GetSlotOwner(master);
+            var owner = ownerID != null ? Get(ownerID) : null;
+            if (owner == null) return null;
+
+            // VFXAttributeParameter / getAttribute: 直接读 attribute 字段(不依赖精确 class 名)
+            string attr = UnityYamlParser.GetStringField(owner.Body, "attribute");
+            if (attr == "velocity") return "velocity";
+            if (attr == "position") { center = Vec3O(0, 0, 0); return "position"; }
+
+            // Subtract(a, b): a=position 属性 & b=常量 → 径向法线，center=b
+            if (owner.ClassType == "Subtract")
+            {
+                var ins = UnityYamlParser.GetRefArrayField(owner.Body, "m_InputSlots");
+                if (ins.Count >= 2)
+                {
+                    Jval ignore;
+                    string aSrc = ClassifyOrientAxisSource(ins[0], out ignore);
+                    if (aSrc == "position")
+                    {
+                        center = ReadInlineVec3(ins[1]) ?? Vec3O(0, 0, 0);
+                        return "position";
+                    }
+                }
+            }
+            return null;
+        }
+
+        private Jval ReadInlineVec3(string slotID)
+        {
+            var s = slotID != null ? Get(slotID) : null;
+            if (s == null) return null;
+            var d = Unwrap(UnityYamlParser.GetSlotInlineValue(s));
+            return (d != null && d.IsObject) ? Vec3O(Nz1(d, "x", 0), Nz1(d, "y", 0), Nz1(d, "z", 0)) : null;
         }
         private static Jval Vec3O(double x, double y, double z) { return Jval.Obj().Set("x", x).Set("y", y).Set("z", z); }
         private static Jval NumArr(params double[] nums) { var a = Jval.Arr(); foreach (var n in nums) a.Push(Jval.Of(n)); return a; }
